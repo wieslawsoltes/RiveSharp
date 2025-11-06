@@ -54,6 +54,19 @@ public sealed class RenderBuffer : IDisposable
         }
     }
 
+    public Mapping Map(BufferMapFlags flags = BufferMapFlags.None)
+    {
+        ThrowIfDisposed();
+        var status = NativeMethods.Buffer.Map(DangerousGetHandle(), flags, out var mapping);
+        status.ThrowIfFailed("Failed to map buffer.");
+        if (mapping.Data == nint.Zero)
+        {
+            throw new RendererException(RendererStatus.InternalError, "Buffer map returned a null pointer.");
+        }
+
+        return new Mapping(this, mapping);
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -70,6 +83,62 @@ public sealed class RenderBuffer : IDisposable
         if (_disposed)
         {
             throw new ObjectDisposedException(nameof(RenderBuffer));
+        }
+    }
+
+    internal void UnmapInternal(in NativeMappedMemory mapping, nuint writtenBytes)
+    {
+        ThrowIfDisposed();
+        var status = NativeMethods.Buffer.Unmap(DangerousGetHandle(), mapping, writtenBytes);
+        status.ThrowIfFailed("Failed to unmap buffer.");
+    }
+
+    public sealed class Mapping : IDisposable
+    {
+        private readonly RenderBuffer _buffer;
+        private NativeMappedMemory _mapping;
+        private bool _disposed;
+
+        internal Mapping(RenderBuffer buffer, NativeMappedMemory mapping)
+        {
+            _buffer = buffer;
+            _mapping = mapping;
+        }
+
+        public nuint Length => _mapping.Length;
+
+        public unsafe Span<byte> AsSpan()
+        {
+            if (_disposed)
+            {
+                throw new ObjectDisposedException(nameof(Mapping));
+            }
+
+            return new Span<byte>((void*)_mapping.Data, checked((int)_mapping.Length));
+        }
+
+        public nint Data
+        {
+            get
+            {
+                if (_disposed)
+                {
+                    throw new ObjectDisposedException(nameof(Mapping));
+                }
+                return _mapping.Data;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _buffer.UnmapInternal(_mapping, _mapping.Length);
+            _mapping = default;
+            _disposed = true;
         }
     }
 }

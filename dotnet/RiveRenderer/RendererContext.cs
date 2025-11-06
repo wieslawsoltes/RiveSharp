@@ -23,6 +23,12 @@ public sealed class RendererContext : IDisposable
 
     internal NativeContextHandle DangerousGetHandle() => new() { Handle = _handle.DangerousGetHandle() };
 
+    internal void UpdateSizeFromSurface(uint width, uint height)
+    {
+        _width = width;
+        _height = height;
+    }
+
     public (uint Width, uint Height) Size
     {
         get
@@ -77,6 +83,19 @@ public sealed class RendererContext : IDisposable
         status.ThrowIfFailed("Failed to submit frame.");
     }
 
+    public void SignalFence(RendererFence fence, ulong value = 0)
+    {
+        ThrowIfDisposed();
+        if (fence is null)
+        {
+            throw new ArgumentNullException(nameof(fence));
+        }
+
+        fence.ThrowIfDisposed();
+        NativeMethods.Fence.Signal(DangerousGetHandle(), fence.DangerousGetHandle(), value)
+            .ThrowIfFailed("Failed to signal fence.");
+    }
+
     public RenderPath CreatePath(FillRule fillRule = FillRule.NonZero)
     {
         ThrowIfDisposed();
@@ -103,7 +122,7 @@ public sealed class RendererContext : IDisposable
         return new RenderPaint(handle);
     }
 
-    public RendererSurface CreateRenderer()
+    public Renderer CreateRenderer()
     {
         ThrowIfDisposed();
         var status = NativeMethods.Renderer.Create(DangerousGetHandle(), out var native);
@@ -113,7 +132,90 @@ public sealed class RendererContext : IDisposable
             throw new RendererException(RendererStatus.InternalError, "Native renderer handle was null.");
         }
         var handle = RendererHandleSafe.FromNative(native.Handle, _handle);
-        return new RendererSurface(handle);
+        return new Renderer(handle);
+    }
+
+    public RendererSurface CreateSurfaceWin32(nint hwnd, uint width, uint height, RendererSurfaceOptions options = default)
+    {
+        ThrowIfDisposed();
+        if (hwnd == 0)
+        {
+            throw new ArgumentException("HWND must be non-zero.", nameof(hwnd));
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("Win32 surface creation requires Windows.");
+        }
+
+        if (width == 0 || height == 0)
+        {
+            if (_width == 0 || _height == 0)
+            {
+                throw new InvalidOperationException("Context dimensions are unknown; provide explicit width and height.");
+            }
+            width = width == 0 ? _width : width;
+            height = height == 0 ? _height : height;
+        }
+
+        var nativeInfo = options.ToNative(hwnd, width, height);
+        var status = NativeMethods.Surface.CreateD3D12Hwnd(
+            _device.DangerousGetHandle(),
+            DangerousGetHandle(),
+            in nativeInfo,
+            out var nativeSurface);
+        status.ThrowIfFailed("Failed to create D3D12 surface.");
+
+        if (nativeSurface.Handle == 0)
+        {
+            throw new RendererException(RendererStatus.InternalError, "Native surface handle was null.");
+        }
+
+        var handle = SurfaceHandleSafe.FromNative(nativeSurface.Handle, _device.Handle, _handle);
+        UpdateSizeFromSurface(width, height);
+        return new RendererSurface(_device, this, handle);
+    }
+
+    public RendererSurface CreateSurfaceMetalLayer(nint layer, uint width, uint height,
+        RendererMetalSurfaceOptions options = default)
+    {
+        ThrowIfDisposed();
+        if (layer == 0)
+        {
+            throw new ArgumentException("CAMetalLayer pointer must be non-zero.", nameof(layer));
+        }
+
+        if (!OperatingSystem.IsMacOS())
+        {
+            throw new PlatformNotSupportedException("Metal surface creation requires macOS.");
+        }
+
+        if (width == 0 || height == 0)
+        {
+            if (_width == 0 || _height == 0)
+            {
+                throw new InvalidOperationException("Context dimensions are unknown; provide explicit width and height.");
+            }
+            width = width == 0 ? _width : width;
+            height = height == 0 ? _height : height;
+        }
+
+        var nativeInfo = options.ToNative(layer, width, height);
+        var status = NativeMethods.Surface.CreateMetalLayer(
+            _device.DangerousGetHandle(),
+            DangerousGetHandle(),
+            in nativeInfo,
+            out var nativeSurface);
+        status.ThrowIfFailed("Failed to create Metal surface.");
+
+        if (nativeSurface.Handle == 0)
+        {
+            throw new RendererException(RendererStatus.InternalError, "Native surface handle was null.");
+        }
+
+        var handle = SurfaceHandleSafe.FromNative(nativeSurface.Handle, _device.Handle, _handle);
+        UpdateSizeFromSurface(width, height);
+        return new RendererSurface(_device, this, handle);
     }
 
     public void Dispose()

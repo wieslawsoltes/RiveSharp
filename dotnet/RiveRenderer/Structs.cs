@@ -131,6 +131,27 @@ internal struct TextStyleOptions
     private byte _reserved;
 }
 
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+internal struct NativeSurfaceCreateInfoD3D12Hwnd
+{
+    public nint Hwnd;
+    public uint Width;
+    public uint Height;
+    public uint BufferCount;
+    public RendererSurfaceFlags Flags;
+    public uint PresentInterval;
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+internal struct NativeSurfaceCreateInfoMetalLayer
+{
+    public nint Layer;
+    public uint Width;
+    public uint Height;
+    public uint SampleCount;
+    public RendererSurfaceFlags Flags;
+}
+
 internal static class RendererConstants
 {
     public const int MaxAdapterName = 256;

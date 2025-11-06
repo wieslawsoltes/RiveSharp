@@ -32,5 +32,26 @@ internal static partial class NativeMethods
             void* data,
             nuint length,
             nuint offset);
+
+        [LibraryImport(LibraryName, EntryPoint = "rive_renderer_buffer_map")]
+        [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+        internal static partial RendererStatus Map(
+            NativeBufferHandle buffer,
+            BufferMapFlags flags,
+            out NativeMappedMemory mapping);
+
+        [LibraryImport(LibraryName, EntryPoint = "rive_renderer_buffer_unmap")]
+        [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+        internal static partial RendererStatus Unmap(
+            NativeBufferHandle buffer,
+            in NativeMappedMemory mapping,
+            nuint writtenBytes);
     }
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeMappedMemory
+{
+    public nint Data;
+    public nuint Length;
 }

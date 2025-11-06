@@ -50,7 +50,7 @@ Reference material:
    - [x] 3.4 Provide adapter enumeration, capability queries, and stubbed submission routines that forward into the renderer, leaving TODO markers where backend integration will flesh out real GPU calls.
      - Notes: Added null-backend enumeration, capability reporting, and placeholder begin/end/submit routines that currently return `unimplemented` for future backend hookups (`renderer_ffi/src/rive_renderer_ffi.cpp:49`).
 
-4. [ ] Phase 4 – GPU Backend Integration
+4. [x] Phase 4 – GPU Backend Integration
    - [x] 4.1 Align renderer GPU abstraction with C ABI handles (e.g., opaque `rive_renderer_device_t`) and ensure backend-specific resources remain encapsulated.
      - Notes: Windows builds now create real D3D12 devices/queues and tie them to the opaque handles with ref-counted lifetime management (`renderer_ffi/src/rive_renderer_ffi.cpp:375`). Context creation wires into `RenderContextD3D12Impl::MakeContext`, instantiating allocators/command lists so future frame submission can operate on native resources (`renderer_ffi/src/rive_renderer_ffi.cpp:446`).
    - [x] 4.2 Implement adapter selection & capability queries, surfacing required GPU metadata (feature level, queue family, swapchain limits) through ABI structs.
@@ -68,7 +68,7 @@ Reference material:
    - [x] 5.2 Define managed struct/enum mirrors with `[StructLayout(LayoutKind.Sequential, Pack = 1)]` and explicit padding fields aligned to C++ definitions.
      - Notes: Introduced enums and blittable structs for adapters, capabilities, matrices, and frame options mirroring the ABI layout (`dotnet/RiveRenderer/Enums.cs`, `dotnet/RiveRenderer/Structs.cs`).
    - [x] 5.3 Implement safe wrapper classes (`RendererDevice`, `RendererContext`, `RenderPath`, `RenderPaint`, `RenderText`, etc.) that manage native handles, GC finalizers, and `Dispose` patterns without introducing allocations in hot paths.
-     - Notes: Implemented `SafeHandle`-backed wrappers and high-level device/context/path/paint/renderer classes (`dotnet/RiveRenderer/Handles.cs`, `RendererDevice.cs`, `RendererContext.cs`, `RenderPath.cs`, `RenderPaint.cs`, `RendererSurface.cs`).
+     - Notes: Implemented `SafeHandle`-backed wrappers and high-level device/context/path/paint/renderer classes (`dotnet/RiveRenderer/Handles.cs`, `RendererDevice.cs`, `RendererContext.cs`, `RenderPath.cs`, `RenderPaint.cs`, `Renderer.cs`, `RendererSurface.cs`, `RendererSurfaceOptions.cs`, `RendererMetalSurfaceOptions.cs`, `RendererFence.cs`).
    - [x] 5.4 Bind high-level drawing APIs: path construction (`RenderPath` commands, contour iteration), stroke/fill configuration (`RenderPaint` solid, gradient, image paints, blend modes), text layout/shaping (glyph runs, metrics), image uploads, state stack (save/restore, transforms, clips), and render submission to managed counterparts.
      - Notes: Managed wrappers now expose path commands, paint configuration, and renderer operations backed by the new C ABI endpoints (`renderer_ffi/include/rive_renderer_ffi.h:90`, `renderer_ffi/src/rive_renderer_ffi.cpp:1000`, `dotnet/RiveRenderer/RenderPath.cs`). Text/image bindings will build on subsequent native work.
    - [x] 5.5 Provide ergonomic managed helpers (builder patterns, disposable contexts) that minimize allocations while exposing the full vector feature set.
@@ -83,7 +83,7 @@ Reference material:
    - [ ] 6.3 Add rendering behavior tests that exercise vector features end-to-end: path stroking/filling, gradient paints, image paints, blend modes, text shaping, clipping, and state stack transitions. Capture pixel diffs against golden images for CPU fallback and sanity render checks on GPU backends.
    - [ ] 6.4 Create interop regression suites that validate managed wrappers call the correct native APIs (mock transports, handle lifetime stress tests, exception propagation).
    - [ ] 6.5 Establish CI workflows for cross-platform builds (premake/cmake + dotnet), artifact packaging, and publishing of native binaries alongside managed assemblies.
-     - Notes: CMake build currently links `rive_renderer_ffi` without river-renderer object libraries; native build fails until renderer static/shared libs are wired into the target.
+     - Notes: Native build now links against the river-renderer GPU/static libraries and copies the outputs into `dotnet/RiveRenderer/runtimes/<rid>/native` via the refreshed `scripts/build-*.sh|ps1` helpers. Remaining work: wire these scripts into CI, add publish steps, and validate Windows/Linux packaging.
    - [ ] 6.6 Introduce automated checking (clang-tidy with FFI rules, clang-format, analyzers) and static analysis for unsafe blocks and threading primitives.
 
 7. [x] Phase 7 – Documentation & Samples
@@ -94,9 +94,12 @@ Reference material:
    - [ ] 7.4 Prepare release packaging notes (NuGet layout, native library distribution) and coordinate semantic versioning across native and managed components.
 
 8. [ ] Phase 8 – GPU Surface & Buffer Interop
-   - [ ] 8.1 Define host windowing contracts per platform (Windows HWND/DXGI, macOS CAMetalLayer, Linux VkSurfaceKHR) and gather required lifecycle hooks from the embedding app.
+   - [x] 8.1 Define host windowing contracts per platform (Windows HWND/DXGI, macOS CAMetalLayer, Linux VkSurfaceKHR) and gather required lifecycle hooks from the embedding app.
+     - Notes: Authored `docs/renderer-surface-contracts.md` covering HWND/DXGI, CAMetalLayer, and VkSurfaceKHR requirements (creation, resize, presentation, teardown) so embedding apps can supply stable handles and handle device-loss.
    - [ ] 8.2 Extend the C ABI with surface/swapchain creation, resize, present, and destruction, mirroring `fiddle_context_*` patterns for Metal/Vulkan/D3D12 and mapping to managed `RendererSurface`.
+     - Notes: D3D12 `HWND` + CAMetalLayer interop is live end-to-end, including managed helpers and native build outputs landing in the sample runtimes (`scripts/build-*.sh`). Outstanding: add Vulkan (Xlib/Wayland) and OpenGL swapchain paths, plus cross-platform smoke tests before flipping this to done.
    - [ ] 8.3 Expose GPU buffer map/unmap and synchronization primitives (fences/semaphores) across backends so persistent uploads bypass staging paths; update managed bindings with safe pinning helpers.
+     - Notes: Introduced shared `rive_renderer_buffer_map`/`unmap` entry points with managed `RenderBuffer.Mapping` helpers and added D3D12 fence primitives + managed `RendererFence` to coordinate queue completion; additional backends still need plumbing and cross-queue semantics.
    - [ ] 8.4 Verify backend coverage (Metal/Vulkan/D3D12/D3D11/OpenGL/Null) with representative smoke tests and document unsupported combinations.
 
 9. [ ] Phase 9 – Samples & CI Expansion

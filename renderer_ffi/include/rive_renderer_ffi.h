@@ -116,6 +116,56 @@ extern "C"
     };
 #pragma pack(pop)
 
+    enum class rive_renderer_surface_flags_t : std::uint32_t
+    {
+        none          = 0,
+        enable_vsync  = 1 << 0,
+        allow_tearing = 1 << 1,
+    };
+
+    enum class rive_renderer_present_flags_t : std::uint32_t
+    {
+        none          = 0,
+        allow_tearing = 1 << 0,
+    };
+
+#pragma pack(push, 1)
+    struct rive_renderer_surface_create_info_d3d12_hwnd_t
+    {
+        void*                           hwnd;
+        std::uint32_t                   width;
+        std::uint32_t                   height;
+        std::uint32_t                   buffer_count;
+        rive_renderer_surface_flags_t   flags;
+        std::uint32_t                   present_interval;
+    };
+
+    struct rive_renderer_surface_create_info_metal_layer_t
+    {
+        void*                         layer;
+        std::uint32_t                 width;
+        std::uint32_t                 height;
+        std::uint32_t                 sample_count;
+        rive_renderer_surface_flags_t flags;
+    };
+#pragma pack(pop)
+
+    struct rive_renderer_surface_t
+    {
+        void* handle;
+    };
+
+    struct rive_renderer_fence_t
+    {
+        void* handle;
+    };
+
+    struct rive_renderer_mapped_memory_t
+    {
+        void*        data;
+        std::size_t  length;
+    };
+
     struct rive_renderer_device_t
     {
         void* handle;
@@ -149,6 +199,13 @@ extern "C"
     {
         none                          = 0,
         mapped_once_at_initialization = 1 << 0,
+    };
+
+    enum class rive_renderer_buffer_map_flags_t : std::uint32_t
+    {
+        none             = 0,
+        invalidate_range = 1 << 0,
+        discard_range    = 1 << 1,
     };
 
     enum class rive_renderer_image_filter_t : std::uint8_t
@@ -310,6 +367,49 @@ extern "C"
 
     RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t rive_renderer_context_submit(rive_renderer_context_t context);
 
+    RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t
+    rive_renderer_surface_create_d3d12_hwnd(rive_renderer_device_t device, rive_renderer_context_t context,
+                                            const rive_renderer_surface_create_info_d3d12_hwnd_t* info,
+                                            rive_renderer_surface_t* out_surface);
+
+    RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t
+    rive_renderer_surface_create_metal_layer(rive_renderer_device_t device, rive_renderer_context_t context,
+                                             const rive_renderer_surface_create_info_metal_layer_t* info,
+                                             rive_renderer_surface_t* out_surface);
+
+    RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t rive_renderer_surface_retain(rive_renderer_surface_t surface);
+
+    RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t rive_renderer_surface_release(rive_renderer_surface_t surface);
+
+    RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t rive_renderer_surface_get_size(rive_renderer_surface_t surface,
+                                                                                   std::uint32_t*          out_width,
+                                                                                   std::uint32_t*          out_height);
+
+    RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t rive_renderer_surface_resize(rive_renderer_surface_t surface,
+                                                                                 std::uint32_t            width,
+                                                                                 std::uint32_t            height);
+
+    RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t
+    rive_renderer_surface_present(rive_renderer_surface_t surface, std::uint32_t present_interval,
+                                  rive_renderer_present_flags_t flags);
+
+    RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t rive_renderer_fence_create(rive_renderer_device_t device,
+                                                                               rive_renderer_fence_t* out_fence);
+
+    RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t rive_renderer_fence_retain(rive_renderer_fence_t fence);
+
+    RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t rive_renderer_fence_release(rive_renderer_fence_t fence);
+
+    RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t
+    rive_renderer_fence_get_completed_value(rive_renderer_fence_t fence, std::uint64_t* out_value);
+
+    RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t
+    rive_renderer_fence_wait(rive_renderer_fence_t fence, std::uint64_t value, std::uint64_t timeout_ms);
+
+    RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t
+    rive_renderer_context_signal_fence(rive_renderer_context_t context, rive_renderer_fence_t fence,
+                                       std::uint64_t value);
+
     RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t rive_renderer_path_create(rive_renderer_context_t   context,
                                                                               rive_renderer_fill_rule_t fill_rule,
                                                                               rive_renderer_path_t*     out_path);
@@ -402,6 +502,14 @@ extern "C"
                                                                                 const void*            data,
                                                                                 std::size_t            data_length,
                                                                                 std::size_t            offset);
+
+    RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t
+    rive_renderer_buffer_map(rive_renderer_buffer_t buffer, rive_renderer_buffer_map_flags_t flags,
+                             rive_renderer_mapped_memory_t* out_mapping);
+
+    RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t
+    rive_renderer_buffer_unmap(rive_renderer_buffer_t buffer, const rive_renderer_mapped_memory_t* mapping,
+                               std::size_t written_bytes);
 
     RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t rive_renderer_image_decode(rive_renderer_context_t context,
                                                                                const std::uint8_t*     encoded_data,

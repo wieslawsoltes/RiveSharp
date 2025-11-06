@@ -55,3 +55,15 @@ internal struct NativeShaderHandle
 {
     public nint Handle;
 }
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeFenceHandle
+{
+    public nint Handle;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeSurfaceHandle
+{
+    public nint Handle;
+}

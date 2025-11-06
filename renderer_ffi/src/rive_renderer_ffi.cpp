@@ -10,6 +10,7 @@
 #include <string>
 #include <tuple>
 #include <vector>
+#include <limits>
 
 #include "rive/renderer/render_context.hpp"
 #include "rive/renderer.hpp"
@@ -42,6 +43,33 @@
 #include "rive/renderer/d3d/d3d.hpp"
 #endif
 
+#if defined(__APPLE__) && !defined(RIVE_UNREAL)
+extern "C"
+{
+    void* rive_metal_device_new(rive_renderer_capabilities_t* caps);
+    void rive_metal_device_release(void* device);
+    rive_renderer_status_t rive_metal_context_create(void* device, std::uint32_t width, std::uint32_t height,
+                                                     void** out_context,
+                                                     std::unique_ptr<rive::gpu::RenderContext>* out_render_context);
+    void rive_metal_context_destroy(void* context);
+    rive_renderer_status_t rive_metal_context_begin_frame(void* context, rive::gpu::RenderContext* render_context,
+                                                          std::uint32_t* width, std::uint32_t* height,
+                                                          const rive_renderer_frame_options_t* options, void* surface);
+    rive_renderer_status_t rive_metal_context_end_frame(void* context, rive::gpu::RenderContext* render_context,
+                                                        void* surface);
+    rive_renderer_status_t rive_metal_context_submit(void* context, bool has_surface);
+    rive_renderer_status_t rive_metal_surface_create(void* device, void* context,
+                                                     const rive_renderer_surface_create_info_metal_layer_t* info,
+                                                     void** out_surface);
+    void rive_metal_surface_destroy(void* surface);
+    rive_renderer_status_t rive_metal_surface_resize(void* surface, std::uint32_t width, std::uint32_t height);
+    rive_renderer_status_t rive_metal_surface_present(void* surface, void* context,
+                                                      rive::gpu::RenderContext* render_context,
+                                                      rive_renderer_present_flags_t flags,
+                                                      std::uint32_t present_interval);
+}
+#endif
+
 using namespace std::literals;
 
 namespace
@@ -52,6 +80,11 @@ namespace
     void SetLastError(const char* message)
     {
         g_lastError = message ? message : "";
+    }
+
+    extern "C" void rive_renderer_set_last_error(const char* message)
+    {
+        SetLastError(message);
     }
 
     void ClearLastError()
@@ -269,6 +302,12 @@ namespace
 
     rive_renderer_status_t EnsureD3D12RenderTarget(ContextHandle* context)
     {
+#if defined(_WIN32) && !defined(RIVE_UNREAL)
+        if (context->surface != nullptr)
+        {
+            return EnsureD3D12SurfaceRenderTarget(context);
+        }
+#endif
         auto* device = context->device;
         auto* impl   = GetD3D12Impl(context);
         if (device == nullptr || impl == nullptr)
@@ -405,8 +444,12 @@ namespace
         Microsoft::WRL::ComPtr<ID3D12CommandQueue> directQueue;
         Microsoft::WRL::ComPtr<ID3D12CommandQueue> copyQueue;
         bool                                       isIntel = false;
+#elif defined(__APPLE__) && !defined(RIVE_UNREAL)
+        void*                                      metalDevice {nullptr};
 #endif
     };
+
+    struct SurfaceHandle;
 
     struct ContextHandle
     {
@@ -421,11 +464,15 @@ namespace
         Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> directCommandList;
         Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> copyCommandList;
         Microsoft::WRL::ComPtr<ID3D12Resource>            renderTargetTexture;
-        std::unique_ptr<rive::gpu::RenderTarget>          renderTarget;
+        rive::rcp<rive::gpu::RenderTarget>                renderTarget;
+        SurfaceHandle*                                    surface {nullptr};
         Microsoft::WRL::ComPtr<ID3D12Fence>               directFence;
         Microsoft::WRL::ComPtr<ID3D12Fence>               copyFence;
         HANDLE                                            fenceEvent {nullptr};
         UINT64                                            fenceValue {0};
+#elif defined(__APPLE__) && !defined(RIVE_UNREAL)
+        void*           metalContext {nullptr};
+        SurfaceHandle*  surface {nullptr};
 #endif
         std::unique_ptr<rive::gpu::RenderTarget> cpuRenderTarget;
         std::vector<uint8_t>                     cpuFramebuffer;
@@ -487,6 +534,7 @@ namespace
         rive_renderer_buffer_type_t   type {rive_renderer_buffer_type_t::vertex};
         rive::rcp<rive::RenderBuffer> buffer;
         std::size_t                   size_in_bytes {0};
+        void*                         mapped_ptr {nullptr};
     };
 
     struct ImageHandle
@@ -527,6 +575,203 @@ namespace
         return static_cast<ShaderHandle*>(shader.handle);
     }
 
+    struct FenceHandle
+    {
+        std::atomic<std::uint32_t> ref_count {1};
+        DeviceHandle*              device {nullptr};
+#if defined(_WIN32) && !defined(RIVE_UNREAL)
+        Microsoft::WRL::ComPtr<ID3D12Fence> fence;
+        HANDLE                                   eventHandle {nullptr};
+        std::atomic<std::uint64_t>              lastValue {0};
+#endif
+    };
+
+    FenceHandle* ToFence(const rive_renderer_fence_t& fence)
+    {
+        return static_cast<FenceHandle*>(fence.handle);
+    }
+
+    struct SurfaceHandle
+    {
+        std::atomic<std::uint32_t>        ref_count {1};
+        DeviceHandle*                     device {nullptr};
+        ContextHandle*                    context {nullptr};
+        rive_renderer_backend_t           backend {rive_renderer_backend_t::unknown};
+        std::uint32_t                     width {0};
+        std::uint32_t                     height {0};
+        std::uint32_t                     buffer_count {0};
+        rive_renderer_surface_flags_t     flags {rive_renderer_surface_flags_t::none};
+        std::uint32_t                     present_interval {1};
+#if defined(_WIN32) && !defined(RIVE_UNREAL)
+        void* hwnd {nullptr};
+        Microsoft::WRL::ComPtr<IDXGISwapChain3> swapChain;
+        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> backBuffers;
+        std::vector<rive::rcp<rive::gpu::RenderTarget>>     renderTargets;
+        UINT borrowedIndex {std::numeric_limits<UINT>::max()};
+        bool supportsTearing {false};
+#elif defined(__APPLE__) && !defined(RIVE_UNREAL)
+        void* metalSurface {nullptr};
+#endif
+    };
+
+    SurfaceHandle* ToSurface(const rive_renderer_surface_t& surface)
+    {
+        return static_cast<SurfaceHandle*>(surface.handle);
+    }
+
+#if defined(_WIN32) && !defined(RIVE_UNREAL)
+    bool CheckTearingSupport()
+    {
+        Microsoft::WRL::ComPtr<IDXGIFactory5> factory5;
+        if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory5))))
+        {
+            return false;
+        }
+
+        BOOL allowTearing = FALSE;
+        if (FAILED(factory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allowTearing,
+                                                 sizeof(allowTearing))))
+        {
+            return false;
+        }
+        return allowTearing == TRUE;
+    }
+
+    void ReturnSurfaceRenderTarget(ContextHandle* context)
+    {
+        if (context == nullptr || context->surface == nullptr)
+        {
+            return;
+        }
+
+        auto* surface = context->surface;
+        if (surface->borrowedIndex != std::numeric_limits<UINT>::max() && surface->borrowedIndex <
+                                                                        surface->renderTargets.size())
+        {
+            if (context->renderTarget)
+            {
+                surface->renderTargets[surface->borrowedIndex] = std::move(context->renderTarget);
+            }
+            context->renderTargetTexture.Reset();
+        }
+        else if (context->renderTarget)
+        {
+            context->renderTarget.reset();
+            context->renderTargetTexture.Reset();
+        }
+        surface->borrowedIndex = std::numeric_limits<UINT>::max();
+    }
+
+    rive_renderer_status_t CreateSurfaceRenderTargets(SurfaceHandle* surface, std::uint32_t width,
+                                                      std::uint32_t height)
+    {
+        if (surface == nullptr || surface->context == nullptr || surface->device == nullptr)
+        {
+            SetLastError("surface context or device is null");
+            return rive_renderer_status_t::internal_error;
+        }
+
+        auto* context = surface->context;
+        auto* impl    = GetD3D12Impl(context);
+        if (impl == nullptr)
+        {
+            SetLastError("render context not initialized");
+            return rive_renderer_status_t::internal_error;
+        }
+
+        surface->backBuffers.clear();
+        surface->renderTargets.clear();
+
+        surface->backBuffers.reserve(surface->buffer_count);
+        surface->renderTargets.reserve(surface->buffer_count);
+
+        for (std::uint32_t i = 0; i < surface->buffer_count; ++i)
+        {
+            Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
+            HRESULT hr = surface->swapChain->GetBuffer(i, IID_PPV_ARGS(&buffer));
+            if (FAILED(hr))
+            {
+                SetLastError("swapchain get buffer failed");
+                return rive_renderer_status_t::internal_error;
+            }
+
+            auto renderTarget = impl->makeRenderTarget(width, height);
+            if (!renderTarget)
+            {
+                SetLastError("makeRenderTarget failed");
+                return rive_renderer_status_t::internal_error;
+            }
+            renderTarget->setTargetTexture(buffer);
+
+            surface->backBuffers.emplace_back(std::move(buffer));
+            surface->renderTargets.emplace_back(std::move(renderTarget));
+        }
+
+        surface->borrowedIndex = std::numeric_limits<UINT>::max();
+        return rive_renderer_status_t::ok;
+    }
+
+    rive_renderer_status_t EnsureD3D12SurfaceRenderTarget(ContextHandle* context)
+    {
+        auto* surface = context->surface;
+        if (surface == nullptr || surface->swapChain == nullptr)
+        {
+            SetLastError("surface not initialized");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        UINT backIndex = surface->swapChain->GetCurrentBackBufferIndex();
+        if (backIndex >= surface->renderTargets.size())
+        {
+            SetLastError("swapchain buffer index out of range");
+            return rive_renderer_status_t::internal_error;
+        }
+
+        context->width  = surface->width;
+        context->height = surface->height;
+
+        if (surface->borrowedIndex == backIndex && context->renderTarget)
+        {
+            context->renderTargetTexture = surface->backBuffers[backIndex];
+            return rive_renderer_status_t::ok;
+        }
+
+        if (surface->borrowedIndex != std::numeric_limits<UINT>::max() && context->renderTarget)
+        {
+            // Return previously borrowed target before switching to a new one.
+            ReturnSurfaceRenderTarget(context);
+        }
+
+        if (!surface->renderTargets[backIndex])
+        {
+            auto* impl = GetD3D12Impl(context);
+            if (impl == nullptr)
+            {
+                SetLastError("render context not initialized");
+                return rive_renderer_status_t::internal_error;
+            }
+            auto renderTarget = impl->makeRenderTarget(surface->width, surface->height);
+            if (!renderTarget)
+            {
+                SetLastError("makeRenderTarget failed");
+                return rive_renderer_status_t::internal_error;
+            }
+            renderTarget->setTargetTexture(surface->backBuffers[backIndex]);
+            surface->renderTargets[backIndex] = std::move(renderTarget);
+        }
+
+        if (!surface->renderTargets[backIndex])
+        {
+            SetLastError("render target unavailable");
+            return rive_renderer_status_t::internal_error;
+        }
+
+        context->renderTarget        = std::move(surface->renderTargets[backIndex]);
+        context->renderTargetTexture = surface->backBuffers[backIndex];
+        surface->borrowedIndex       = backIndex;
+        return rive_renderer_status_t::ok;
+    }
+#endif
     bool ConvertFillRule(rive_renderer_fill_rule_t value, rive::FillRule* out)
     {
         switch (value)
@@ -760,6 +1005,27 @@ namespace
         return desc;
     }
 
+#if defined(__APPLE__) && !defined(RIVE_UNREAL)
+    rive_renderer_adapter_desc_t MakeMetalAdapter()
+    {
+        rive_renderer_adapter_desc_t desc {};
+        desc.backend                = rive_renderer_backend_t::metal;
+        desc.backend_padding        = 0;
+        desc.vendor_id              = 0;
+        desc.device_id              = 0;
+        desc.subsys_id              = 0;
+        desc.revision               = 1;
+        desc.dedicated_video_memory = 0;
+        desc.shared_system_memory   = 0;
+        desc.flags                  = static_cast<std::uint32_t>(rive_renderer_feature_flags_t::headless_supported);
+        desc.reserved               = 0;
+        const char name[]           = "Metal Default Device";
+        std::memcpy(desc.name, name, sizeof(name));
+        std::memset(desc.reserved_padding, 0, sizeof(desc.reserved_padding));
+        return desc;
+    }
+#endif
+
     bool ValidateContextSize(std::uint32_t width, std::uint32_t height)
     {
         return width > 0 && height > 0;
@@ -813,7 +1079,11 @@ extern "C"
             return rive_renderer_status_t::null_pointer;
         }
 
-        const rive_renderer_adapter_desc_t candidates[] = {MakeNullAdapter()};
+        const rive_renderer_adapter_desc_t candidates[] = {
+#if defined(__APPLE__) && !defined(RIVE_UNREAL)
+            MakeMetalAdapter(),
+#endif
+            MakeNullAdapter()};
         const std::size_t                  total        = sizeof(candidates) / sizeof(candidates[0]);
         *count                                          = total;
 
@@ -897,6 +1167,41 @@ extern "C"
         }
 #endif
 
+        if (info != nullptr && info->backend == rive_renderer_backend_t::metal)
+        {
+#if defined(__APPLE__) && !defined(RIVE_UNREAL)
+            auto* handle = new (std::nothrow) DeviceHandle();
+            if (handle == nullptr)
+            {
+                SetLastError("allocation failed");
+                return rive_renderer_status_t::out_of_memory;
+            }
+
+            rive_renderer_capabilities_t caps {};
+            void* metalDevice = rive_metal_device_new(&caps);
+            if (metalDevice == nullptr)
+            {
+                delete handle;
+                if (g_lastError.empty())
+                {
+                    SetLastError("Metal device creation failed");
+                }
+                return rive_renderer_status_t::internal_error;
+            }
+
+            handle->backend      = rive_renderer_backend_t::metal;
+            handle->metalDevice  = metalDevice;
+            handle->capabilities = caps;
+
+            out_device->handle = handle;
+            ClearLastError();
+            return rive_renderer_status_t::ok;
+#else
+            SetLastError("requested backend is not yet implemented");
+            return rive_renderer_status_t::unsupported;
+#endif
+        }
+
         if (info == nullptr || out_device == nullptr)
         {
             SetLastError("device_create received null pointer");
@@ -974,6 +1279,12 @@ extern "C"
             handle->d3d12Device.Reset();
             handle->directQueue.Reset();
             handle->copyQueue.Reset();
+#elif defined(__APPLE__) && !defined(RIVE_UNREAL)
+            if (handle->metalDevice != nullptr)
+            {
+                rive_metal_device_release(handle->metalDevice);
+                handle->metalDevice = nullptr;
+            }
 #endif
             delete handle;
         }
@@ -1115,6 +1426,51 @@ extern "C"
         }
 #endif
 
+#if defined(__APPLE__) && !defined(RIVE_UNREAL)
+        if (device_handle->backend == rive_renderer_backend_t::metal)
+        {
+            if (!ValidateContextSize(width, height))
+            {
+                SetLastError("context dimensions must be non-zero");
+                return rive_renderer_status_t::invalid_parameter;
+            }
+
+            auto* contextHandle = new (std::nothrow) ContextHandle();
+            if (contextHandle == nullptr)
+            {
+                SetLastError("allocation failed");
+                return rive_renderer_status_t::out_of_memory;
+            }
+
+            contextHandle->device = device_handle;
+
+            std::unique_ptr<rive::gpu::RenderContext> renderContext;
+            void*                                      metalContext = nullptr;
+            auto status = rive_metal_context_create(device_handle->metalDevice, width, height, &metalContext,
+                                                    &renderContext);
+            if (status != rive_renderer_status_t::ok)
+            {
+                delete contextHandle;
+                if (g_lastError.empty())
+                {
+                    SetLastError("Metal context creation failed");
+                }
+                return status;
+            }
+
+            contextHandle->renderContext = std::move(renderContext);
+            contextHandle->metalContext  = metalContext;
+            contextHandle->width         = width;
+            contextHandle->height        = height;
+
+            device_handle->ref_count.fetch_add(1, std::memory_order_relaxed);
+
+            out_context->handle = contextHandle;
+            ClearLastError();
+            return rive_renderer_status_t::ok;
+        }
+#endif
+
         if (!ValidateContextSize(width, height))
         {
             SetLastError("context dimensions must be non-zero");
@@ -1167,6 +1523,12 @@ extern "C"
             return rive_renderer_status_t::invalid_handle;
         }
 
+        if (handle->surface != nullptr)
+        {
+            SetLastError("context has an active surface; release the surface before destroying the context");
+            return rive_renderer_status_t::invalid_parameter;
+        }
+
         const std::uint32_t previous = handle->ref_count.fetch_sub(1, std::memory_order_acq_rel);
         if (previous == 0)
         {
@@ -1176,6 +1538,15 @@ extern "C"
 
         if (previous == 1)
         {
+#if defined(_WIN32) && !defined(RIVE_UNREAL)
+            ReturnSurfaceRenderTarget(handle);
+#elif defined(__APPLE__) && !defined(RIVE_UNREAL)
+            if (handle->metalContext != nullptr)
+            {
+                rive_metal_context_destroy(handle->metalContext);
+                handle->metalContext = nullptr;
+            }
+#endif
             if (handle->device != nullptr)
             {
                 DeviceHandle*       device      = handle->device;
@@ -1187,6 +1558,12 @@ extern "C"
                     device->d3d12Device.Reset();
                     device->directQueue.Reset();
                     device->copyQueue.Reset();
+#elif defined(__APPLE__) && !defined(RIVE_UNREAL)
+                    if (device->metalDevice != nullptr)
+                    {
+                        rive_metal_device_release(device->metalDevice);
+                        device->metalDevice = nullptr;
+                    }
 #endif
                     delete device;
                 }
@@ -1201,6 +1578,7 @@ extern "C"
             handle->cpuFrameRecording  = false;
             handle->commandListsClosed = false;
 #endif
+            handle->surface = nullptr;
             delete handle;
         }
 
@@ -1288,6 +1666,25 @@ extern "C"
 
         handle->width  = width;
         handle->height = height;
+
+#if defined(__APPLE__) && !defined(RIVE_UNREAL)
+        if (handle->device != nullptr && handle->device->backend == rive_renderer_backend_t::metal)
+        {
+            auto status = rive_metal_context_begin_frame(handle->metalContext, handle->renderContext.get(),
+                                                         &handle->width, &handle->height, options,
+                                                         handle->surface ? handle->surface->metalSurface : nullptr);
+            if (status != rive_renderer_status_t::ok)
+            {
+                return status;
+            }
+
+            handle->hasActiveFrame     = true;
+            handle->commandListsClosed = false;
+            handle->pendingFrameNumber = handle->frameCounter;
+            ClearLastError();
+            return rive_renderer_status_t::ok;
+        }
+#endif
 
 #if defined(_WIN32) && !defined(RIVE_UNREAL)
         if (handle->device != nullptr && handle->device->backend == rive_renderer_backend_t::d3d12)
@@ -1417,6 +1814,29 @@ extern "C"
             ClearLastError();
             return rive_renderer_status_t::ok;
         }
+#else
+#if defined(__APPLE__) && !defined(RIVE_UNREAL)
+        if (handle->device != nullptr && handle->device->backend == rive_renderer_backend_t::metal)
+        {
+            if (!handle->hasActiveFrame)
+            {
+                SetLastError("begin_frame must be called before end_frame");
+                return rive_renderer_status_t::invalid_parameter;
+            }
+
+            auto status = rive_metal_context_end_frame(handle->metalContext, handle->renderContext.get(),
+                                                       handle->surface ? handle->surface->metalSurface : nullptr);
+            if (status != rive_renderer_status_t::ok)
+            {
+                return status;
+            }
+
+            handle->hasActiveFrame     = false;
+            handle->commandListsClosed = true;
+            ClearLastError();
+            return rive_renderer_status_t::ok;
+        }
+#endif
 #endif
 
         if (handle->device != nullptr && handle->device->backend == rive_renderer_backend_t::null)
@@ -1518,6 +1938,35 @@ extern "C"
         }
 #endif
 
+#if defined(__APPLE__) && !defined(RIVE_UNREAL)
+        if (handle->device != nullptr && handle->device->backend == rive_renderer_backend_t::metal)
+        {
+            if (!handle->commandListsClosed)
+            {
+                SetLastError("end_frame must be called before submit");
+                return rive_renderer_status_t::invalid_parameter;
+            }
+
+            auto status = rive_metal_context_submit(handle->metalContext, handle->surface != nullptr);
+            if (status != rive_renderer_status_t::ok)
+            {
+                return status;
+            }
+
+            handle->pendingFrameNumber = 0;
+
+            if (handle->surface == nullptr)
+            {
+                handle->lastCompletedFrame = handle->frameCounter;
+                handle->frameCounter += 1;
+            }
+
+            handle->commandListsClosed = false;
+            ClearLastError();
+            return rive_renderer_status_t::ok;
+        }
+#endif
+
         if (handle->device != nullptr && handle->device->backend == rive_renderer_backend_t::null)
         {
             if (!handle->commandListsClosed)
@@ -1534,6 +1983,927 @@ extern "C"
 
         SetLastError("context_submit not implemented for this backend");
         return rive_renderer_status_t::unimplemented;
+    }
+
+    rive_renderer_status_t rive_renderer_surface_create_d3d12_hwnd(
+        rive_renderer_device_t device, rive_renderer_context_t context,
+        const rive_renderer_surface_create_info_d3d12_hwnd_t* info, rive_renderer_surface_t* out_surface)
+    {
+        if (out_surface == nullptr)
+        {
+            SetLastError("surface output pointer is null");
+            return rive_renderer_status_t::null_pointer;
+        }
+
+        out_surface->handle = nullptr;
+
+        if (info == nullptr)
+        {
+            SetLastError("surface create info is null");
+            return rive_renderer_status_t::null_pointer;
+        }
+
+        auto* device_handle  = ToDevice(device);
+        auto* context_handle = ToContext(context);
+        if (device_handle == nullptr || context_handle == nullptr)
+        {
+            SetLastError("device or context handle is invalid");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+#if defined(_WIN32) && !defined(RIVE_UNREAL)
+        if (device_handle->backend == rive_renderer_backend_t::d3d12 &&
+            context_handle->device == device_handle)
+        {
+            if (info->hwnd == nullptr)
+            {
+                SetLastError("HWND pointer is null");
+                return rive_renderer_status_t::invalid_parameter;
+            }
+
+            if (context_handle->surface != nullptr)
+            {
+                SetLastError("context already has an attached surface");
+                return rive_renderer_status_t::invalid_parameter;
+            }
+
+            std::uint32_t width  = info->width != 0 ? info->width : context_handle->width;
+            std::uint32_t height = info->height != 0 ? info->height : context_handle->height;
+            if (!ValidateContextSize(width, height))
+            {
+                SetLastError("surface dimensions must be non-zero");
+                return rive_renderer_status_t::invalid_parameter;
+            }
+
+            std::uint32_t bufferCount = info->buffer_count != 0 ? info->buffer_count : 2;
+            if (bufferCount < 2)
+            {
+                bufferCount = 2;
+            }
+
+            Microsoft::WRL::ComPtr<IDXGIFactory4> factory4;
+            HRESULT hr = CreateDXGIFactory2(0, IID_PPV_ARGS(&factory4));
+            if (FAILED(hr))
+            {
+                SetLastError("CreateDXGIFactory2 failed");
+                return rive_renderer_status_t::internal_error;
+            }
+
+            DXGI_SWAP_CHAIN_DESC1 desc {};
+            desc.Width       = width;
+            desc.Height      = height;
+            desc.Format      = DXGI_FORMAT_R8G8B8A8_UNORM;
+            desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+            desc.SwapEffect  = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+            desc.SampleDesc.Count   = 1;
+            desc.SampleDesc.Quality = 0;
+            desc.Scaling            = DXGI_SCALING_NONE;
+            desc.BufferCount        = bufferCount;
+            desc.AlphaMode          = DXGI_ALPHA_MODE_IGNORE;
+
+            bool allowTearing = false;
+            if ((static_cast<std::uint32_t>(info->flags) &
+                 static_cast<std::uint32_t>(rive_renderer_surface_flags_t::allow_tearing)) != 0)
+            {
+                allowTearing = CheckTearingSupport();
+                if (allowTearing)
+                {
+                    desc.Flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+                }
+            }
+
+            Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain1;
+            hr = factory4->CreateSwapChainForHwnd(device_handle->directQueue.Get(),
+                                                  static_cast<HWND>(info->hwnd), &desc, nullptr, nullptr,
+                                                  &swapChain1);
+            if (FAILED(hr))
+            {
+                SetLastError("CreateSwapChainForHwnd failed");
+                return rive_renderer_status_t::internal_error;
+            }
+
+            factory4->MakeWindowAssociation(static_cast<HWND>(info->hwnd), DXGI_MWA_NO_ALT_ENTER);
+
+            Microsoft::WRL::ComPtr<IDXGISwapChain3> swapChain3;
+            hr = swapChain1.As(&swapChain3);
+            if (FAILED(hr))
+            {
+                SetLastError("IDXGISwapChain3 query failed");
+                return rive_renderer_status_t::internal_error;
+            }
+
+            auto* surface = new (std::nothrow) SurfaceHandle();
+            if (surface == nullptr)
+            {
+                SetLastError("allocation failed");
+                return rive_renderer_status_t::out_of_memory;
+            }
+
+            surface->backend          = rive_renderer_backend_t::d3d12;
+            surface->device           = device_handle;
+            surface->context          = context_handle;
+            surface->width            = width;
+            surface->height           = height;
+            surface->buffer_count     = bufferCount;
+            surface->flags            = info->flags;
+            surface->present_interval = info->present_interval != 0 ? info->present_interval : 1;
+            surface->hwnd             = info->hwnd;
+            surface->swapChain        = swapChain3;
+            surface->supportsTearing  = allowTearing;
+
+            context_handle->renderTarget.reset();
+            context_handle->renderTargetTexture.Reset();
+
+            rive_renderer_status_t targetsStatus = CreateSurfaceRenderTargets(surface, width, height);
+            if (targetsStatus != rive_renderer_status_t::ok)
+            {
+                delete surface;
+                return targetsStatus;
+            }
+
+            rive_renderer_status_t retainDeviceStatus = rive_renderer_device_retain(device);
+            if (retainDeviceStatus != rive_renderer_status_t::ok)
+            {
+                delete surface;
+                return retainDeviceStatus;
+            }
+
+            rive_renderer_status_t retainContextStatus = rive_renderer_context_retain(context);
+            if (retainContextStatus != rive_renderer_status_t::ok)
+            {
+                rive_renderer_device_release(device);
+                delete surface;
+                return retainContextStatus;
+            }
+
+            context_handle->surface = surface;
+            context_handle->width   = width;
+            context_handle->height  = height;
+
+            out_surface->handle = surface;
+            ClearLastError();
+            return rive_renderer_status_t::ok;
+        }
+        SetLastError("surface creation not supported for this backend");
+        return rive_renderer_status_t::unsupported;
+#else
+        (void)info;
+        SetLastError("surface creation not supported on this platform");
+        return rive_renderer_status_t::unsupported;
+#endif
+    }
+
+    rive_renderer_status_t rive_renderer_surface_create_metal_layer(
+        rive_renderer_device_t device, rive_renderer_context_t context,
+        const rive_renderer_surface_create_info_metal_layer_t* info, rive_renderer_surface_t* out_surface)
+    {
+        (void)device;
+        (void)context;
+        (void)info;
+        if (out_surface != nullptr)
+        {
+            out_surface->handle = nullptr;
+        }
+#if defined(__APPLE__) && !defined(RIVE_UNREAL)
+        auto* device_handle  = ToDevice(device);
+        auto* context_handle = ToContext(context);
+        if (device_handle == nullptr || context_handle == nullptr)
+        {
+            SetLastError("device or context handle is invalid");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        if (device_handle->backend != rive_renderer_backend_t::metal ||
+            context_handle->device != device_handle)
+        {
+            SetLastError("surface creation not supported for this backend");
+            return rive_renderer_status_t::unsupported;
+        }
+
+        if (info == nullptr)
+        {
+            SetLastError("surface create info is null");
+            return rive_renderer_status_t::null_pointer;
+        }
+
+        if (context_handle->surface != nullptr)
+        {
+            SetLastError("context already has an attached surface");
+            return rive_renderer_status_t::invalid_parameter;
+        }
+
+        if (info->layer == nullptr)
+        {
+            SetLastError("CAMetalLayer pointer is null");
+            return rive_renderer_status_t::invalid_parameter;
+        }
+
+        std::uint32_t width  = info->width != 0 ? info->width : context_handle->width;
+        std::uint32_t height = info->height != 0 ? info->height : context_handle->height;
+        if (!ValidateContextSize(width, height))
+        {
+            SetLastError("surface dimensions must be non-zero");
+            return rive_renderer_status_t::invalid_parameter;
+            }
+
+        auto* surface = new (std::nothrow) SurfaceHandle();
+        if (surface == nullptr)
+        {
+            SetLastError("allocation failed");
+            return rive_renderer_status_t::out_of_memory;
+        }
+
+        surface->backend          = rive_renderer_backend_t::metal;
+        surface->device           = device_handle;
+        surface->context          = context_handle;
+        surface->width            = width;
+        surface->height           = height;
+        surface->buffer_count     = 1;
+        surface->flags            = info->flags;
+        surface->present_interval = 1;
+
+        rive_renderer_surface_create_info_metal_layer_t adjustedInfo = *info;
+        adjustedInfo.width  = width;
+        adjustedInfo.height = height;
+
+        void* metalSurface = nullptr;
+        rive_renderer_status_t status = rive_metal_surface_create(device_handle->metalDevice, context_handle->metalContext,
+                                                                  &adjustedInfo, &metalSurface);
+        if (status != rive_renderer_status_t::ok)
+        {
+            delete surface;
+            if (g_lastError.empty())
+            {
+                SetLastError("Metal surface creation failed");
+            }
+            return status;
+        }
+
+        surface->metalSurface = metalSurface;
+
+        rive_renderer_status_t retainDeviceStatus = rive_renderer_device_retain(device);
+        if (retainDeviceStatus != rive_renderer_status_t::ok)
+        {
+            rive_metal_surface_destroy(surface->metalSurface);
+            delete surface;
+            return retainDeviceStatus;
+        }
+
+        rive_renderer_status_t retainContextStatus = rive_renderer_context_retain(context);
+        if (retainContextStatus != rive_renderer_status_t::ok)
+        {
+            rive_renderer_device_release(device);
+            rive_metal_surface_destroy(surface->metalSurface);
+            delete surface;
+            return retainContextStatus;
+        }
+
+        context_handle->surface = surface;
+        context_handle->width   = width;
+        context_handle->height  = height;
+
+        out_surface->handle = surface;
+        ClearLastError();
+        return rive_renderer_status_t::ok;
+#else
+        SetLastError("Metal surface creation not supported on this platform");
+        return rive_renderer_status_t::unsupported;
+#endif
+    }
+
+    rive_renderer_status_t rive_renderer_surface_retain(rive_renderer_surface_t surface)
+    {
+        auto* handle = ToSurface(surface);
+        if (handle == nullptr)
+        {
+            SetLastError("surface handle is null");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        handle->ref_count.fetch_add(1, std::memory_order_relaxed);
+        ClearLastError();
+        return rive_renderer_status_t::ok;
+    }
+
+    rive_renderer_status_t rive_renderer_surface_release(rive_renderer_surface_t surface)
+    {
+        auto* handle = ToSurface(surface);
+        if (handle == nullptr)
+        {
+            SetLastError("surface handle is null");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        const std::uint32_t previous = handle->ref_count.fetch_sub(1, std::memory_order_acq_rel);
+        if (previous == 0)
+        {
+            handle->ref_count.fetch_add(1, std::memory_order_relaxed);
+            SetLastError("surface handle refcount underflow");
+            return rive_renderer_status_t::internal_error;
+        }
+
+        if (previous == 1)
+        {
+#if defined(_WIN32) && !defined(RIVE_UNREAL)
+            if (handle->context != nullptr)
+            {
+                ReturnSurfaceRenderTarget(handle->context);
+                if (handle->context->surface == handle)
+                {
+                    handle->context->surface = nullptr;
+                }
+            }
+            handle->renderTargets.clear();
+            handle->backBuffers.clear();
+            handle->swapChain.Reset();
+#elif defined(__APPLE__) && !defined(RIVE_UNREAL)
+            if (handle->metalSurface != nullptr)
+            {
+                rive_metal_surface_destroy(handle->metalSurface);
+                handle->metalSurface = nullptr;
+            }
+            if (handle->context != nullptr && handle->context->surface == handle)
+            {
+                handle->context->surface = nullptr;
+            }
+#endif
+            if (handle->context != nullptr)
+            {
+                rive_renderer_context_t ctx {};
+                ctx.handle = handle->context;
+                rive_renderer_context_release(ctx);
+            }
+            if (handle->device != nullptr)
+            {
+                rive_renderer_device_t dev {};
+                dev.handle = handle->device;
+                rive_renderer_device_release(dev);
+            }
+            handle->context = nullptr;
+            handle->device  = nullptr;
+            delete handle;
+        }
+
+        ClearLastError();
+        return rive_renderer_status_t::ok;
+    }
+
+    rive_renderer_status_t rive_renderer_surface_get_size(rive_renderer_surface_t surface, std::uint32_t* out_width,
+                                                          std::uint32_t* out_height)
+    {
+        if (out_width == nullptr || out_height == nullptr)
+        {
+            SetLastError("surface size output pointers are null");
+            return rive_renderer_status_t::null_pointer;
+        }
+
+        auto* handle = ToSurface(surface);
+        if (handle == nullptr)
+        {
+            SetLastError("surface handle is null");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        *out_width  = handle->width;
+        *out_height = handle->height;
+        ClearLastError();
+        return rive_renderer_status_t::ok;
+    }
+
+    rive_renderer_status_t rive_renderer_surface_resize(rive_renderer_surface_t surface, std::uint32_t width,
+                                                        std::uint32_t height)
+    {
+#if defined(_WIN32) && !defined(RIVE_UNREAL)
+        auto* handle = ToSurface(surface);
+        if (handle == nullptr)
+        {
+            SetLastError("surface handle is null");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        if (handle->backend != rive_renderer_backend_t::d3d12)
+        {
+            SetLastError("surface resize not supported for this backend");
+            return rive_renderer_status_t::unsupported;
+        }
+
+        if (!ValidateContextSize(width, height))
+        {
+            SetLastError("surface dimensions must be non-zero");
+            return rive_renderer_status_t::invalid_parameter;
+        }
+
+        if (handle->swapChain == nullptr || handle->context == nullptr)
+        {
+            SetLastError("surface not initialized");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        auto* context = handle->context;
+        if (context->hasActiveFrame)
+        {
+            SetLastError("cannot resize while a frame is active");
+            return rive_renderer_status_t::invalid_parameter;
+        }
+
+        ReturnSurfaceRenderTarget(context);
+        context->renderTarget.reset();
+        context->renderTargetTexture.Reset();
+
+        handle->renderTargets.clear();
+        handle->backBuffers.clear();
+
+        UINT resizeFlags = handle->supportsTearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+        HRESULT hr = handle->swapChain->ResizeBuffers(handle->buffer_count, width, height, DXGI_FORMAT_R8G8B8A8_UNORM,
+                                                      resizeFlags);
+        if (FAILED(hr))
+        {
+            SetLastError("swapchain resize failed");
+            return rive_renderer_status_t::internal_error;
+        }
+
+        rive_renderer_status_t targetsStatus = CreateSurfaceRenderTargets(handle, width, height);
+        if (targetsStatus != rive_renderer_status_t::ok)
+        {
+            return targetsStatus;
+        }
+
+        handle->width  = width;
+        handle->height = height;
+        context->width  = width;
+        context->height = height;
+
+        ClearLastError();
+        return rive_renderer_status_t::ok;
+#elif defined(__APPLE__) && !defined(RIVE_UNREAL)
+        auto* handle = ToSurface(surface);
+        if (handle == nullptr)
+        {
+            SetLastError("surface handle is null");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        if (handle->backend != rive_renderer_backend_t::metal)
+        {
+            SetLastError("surface resize not supported for this backend");
+            return rive_renderer_status_t::unsupported;
+        }
+
+        if (!ValidateContextSize(width, height))
+        {
+            SetLastError("surface dimensions must be non-zero");
+            return rive_renderer_status_t::invalid_parameter;
+        }
+
+        if (handle->metalSurface == nullptr || handle->context == nullptr)
+        {
+            SetLastError("surface not initialized");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        auto* context = handle->context;
+        if (context->hasActiveFrame)
+        {
+            SetLastError("cannot resize while a frame is active");
+            return rive_renderer_status_t::invalid_parameter;
+        }
+
+        rive_renderer_status_t status = rive_metal_surface_resize(handle->metalSurface, width, height);
+        if (status != rive_renderer_status_t::ok)
+        {
+            return status;
+        }
+
+        handle->width  = width;
+        handle->height = height;
+        context->width  = width;
+        context->height = height;
+
+        ClearLastError();
+        return rive_renderer_status_t::ok;
+#else
+        (void)surface;
+        (void)width;
+        (void)height;
+        SetLastError("surface resize not supported on this platform");
+        return rive_renderer_status_t::unsupported;
+#endif
+    }
+
+    rive_renderer_status_t rive_renderer_surface_present(rive_renderer_surface_t surface, std::uint32_t present_interval,
+                                                         rive_renderer_present_flags_t flags)
+    {
+#if defined(_WIN32) && !defined(RIVE_UNREAL)
+        auto* handle = ToSurface(surface);
+        if (handle == nullptr)
+        {
+            SetLastError("surface handle is null");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        if (handle->backend != rive_renderer_backend_t::d3d12)
+        {
+            SetLastError("surface present not supported for this backend");
+            return rive_renderer_status_t::unsupported;
+        }
+
+        if (handle->swapChain == nullptr || handle->context == nullptr)
+        {
+            SetLastError("surface not initialized");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        auto* context = handle->context;
+        if (context->hasActiveFrame || context->pendingFrameNumber != 0)
+        {
+            SetLastError("submit must be called before present");
+            return rive_renderer_status_t::invalid_parameter;
+        }
+
+        ReturnSurfaceRenderTarget(context);
+
+        UINT syncInterval = present_interval != 0 ? present_interval : handle->present_interval;
+        UINT presentFlags = 0;
+        if ((static_cast<std::uint32_t>(flags) &
+             static_cast<std::uint32_t>(rive_renderer_present_flags_t::allow_tearing)) != 0 &&
+            handle->supportsTearing && syncInterval == 0)
+        {
+            presentFlags |= DXGI_PRESENT_ALLOW_TEARING;
+        }
+
+        HRESULT hr = handle->swapChain->Present(syncInterval, presentFlags);
+        if (FAILED(hr))
+        {
+            if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
+            {
+                SetLastError("device lost during present");
+                return rive_renderer_status_t::device_lost;
+            }
+            SetLastError("swapchain present failed");
+            return rive_renderer_status_t::internal_error;
+        }
+
+        context->renderTarget.reset();
+        context->renderTargetTexture.Reset();
+        handle->borrowedIndex = std::numeric_limits<UINT>::max();
+
+        ClearLastError();
+        return rive_renderer_status_t::ok;
+#elif defined(__APPLE__) && !defined(RIVE_UNREAL)
+        auto* handle = ToSurface(surface);
+        if (handle == nullptr)
+        {
+            SetLastError("surface handle is null");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        if (handle->backend != rive_renderer_backend_t::metal)
+        {
+            SetLastError("surface present not supported for this backend");
+            return rive_renderer_status_t::unsupported;
+        }
+
+        if (handle->metalSurface == nullptr || handle->context == nullptr)
+        {
+            SetLastError("surface not initialized");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        auto* context = handle->context;
+        if (context->hasActiveFrame || context->pendingFrameNumber != 0)
+        {
+            SetLastError("submit must be called before present");
+            return rive_renderer_status_t::invalid_parameter;
+        }
+
+        rive_renderer_status_t status = rive_metal_surface_present(handle->metalSurface, context->metalContext,
+                                                                   context->renderContext.get(), flags,
+                                                                   present_interval);
+        if (status != rive_renderer_status_t::ok)
+        {
+            return status;
+        }
+
+        context->lastCompletedFrame = context->frameCounter;
+        context->frameCounter += 1;
+        context->commandListsClosed = false;
+        context->pendingFrameNumber = 0;
+
+        ClearLastError();
+        return rive_renderer_status_t::ok;
+#else
+        (void)surface;
+        (void)present_interval;
+        (void)flags;
+        SetLastError("surface present not supported on this platform");
+        return rive_renderer_status_t::unsupported;
+#endif
+    }
+
+    rive_renderer_status_t rive_renderer_fence_create(rive_renderer_device_t device, rive_renderer_fence_t* out_fence)
+    {
+        if (out_fence == nullptr)
+        {
+            SetLastError("fence output pointer is null");
+            return rive_renderer_status_t::null_pointer;
+        }
+
+        out_fence->handle = nullptr;
+
+        auto* device_handle = ToDevice(device);
+        if (device_handle == nullptr)
+        {
+            SetLastError("device handle is invalid");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+#if defined(_WIN32) && !defined(RIVE_UNREAL)
+        if (device_handle->backend != rive_renderer_backend_t::d3d12)
+        {
+            SetLastError("fence creation not supported for this backend");
+            return rive_renderer_status_t::unsupported;
+        }
+
+        auto* fenceHandle = new (std::nothrow) FenceHandle();
+        if (fenceHandle == nullptr)
+        {
+            SetLastError("allocation failed");
+            return rive_renderer_status_t::out_of_memory;
+        }
+
+        HRESULT hr = device_handle->d3d12Device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fenceHandle->fence));
+        if (FAILED(hr))
+        {
+            delete fenceHandle;
+            SetLastError("CreateFence failed");
+            return rive_renderer_status_t::internal_error;
+        }
+
+        fenceHandle->eventHandle = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+        if (fenceHandle->eventHandle == nullptr)
+        {
+            fenceHandle->fence.Reset();
+            delete fenceHandle;
+            SetLastError("CreateEvent failed");
+            return rive_renderer_status_t::internal_error;
+        }
+
+        fenceHandle->device = device_handle;
+        fenceHandle->lastValue.store(0, std::memory_order_relaxed);
+        device_handle->ref_count.fetch_add(1, std::memory_order_relaxed);
+
+        out_fence->handle = fenceHandle;
+        ClearLastError();
+        return rive_renderer_status_t::ok;
+#else
+        (void)device;
+        (void)device_handle;
+        SetLastError("fence creation not supported on this platform");
+        return rive_renderer_status_t::unsupported;
+#endif
+    }
+
+    rive_renderer_status_t rive_renderer_fence_retain(rive_renderer_fence_t fence)
+    {
+        auto* handle = ToFence(fence);
+        if (handle == nullptr)
+        {
+            SetLastError("fence handle is null");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        handle->ref_count.fetch_add(1, std::memory_order_relaxed);
+        ClearLastError();
+        return rive_renderer_status_t::ok;
+    }
+
+    rive_renderer_status_t rive_renderer_fence_release(rive_renderer_fence_t fence)
+    {
+        auto* handle = ToFence(fence);
+        if (handle == nullptr)
+        {
+            SetLastError("fence handle is null");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        const std::uint32_t previous = handle->ref_count.fetch_sub(1, std::memory_order_acq_rel);
+        if (previous == 0)
+        {
+            handle->ref_count.fetch_add(1, std::memory_order_relaxed);
+            SetLastError("fence handle refcount underflow");
+            return rive_renderer_status_t::internal_error;
+        }
+
+        if (previous == 1)
+        {
+#if defined(_WIN32) && !defined(RIVE_UNREAL)
+            if (handle->eventHandle != nullptr)
+            {
+                CloseHandle(handle->eventHandle);
+                handle->eventHandle = nullptr;
+            }
+            handle->fence.Reset();
+#endif
+            if (handle->device != nullptr)
+            {
+                DeviceHandle*       device      = handle->device;
+                const std::uint32_t device_prev = device->ref_count.fetch_sub(1, std::memory_order_acq_rel);
+                if (device_prev == 0)
+                {
+                    device->ref_count.fetch_add(1, std::memory_order_relaxed);
+                }
+                else if (device_prev == 1)
+                {
+#if defined(_WIN32) && !defined(RIVE_UNREAL)
+                    device->adapter.Reset();
+                    device->d3d12Device.Reset();
+                    device->directQueue.Reset();
+                    device->copyQueue.Reset();
+#endif
+                    delete device;
+                }
+            }
+            delete handle;
+        }
+
+        ClearLastError();
+        return rive_renderer_status_t::ok;
+    }
+
+    rive_renderer_status_t rive_renderer_fence_get_completed_value(rive_renderer_fence_t fence,
+                                                                   std::uint64_t* out_value)
+    {
+        if (out_value == nullptr)
+        {
+            SetLastError("completed value pointer is null");
+            return rive_renderer_status_t::null_pointer;
+        }
+
+        auto* handle = ToFence(fence);
+        if (handle == nullptr)
+        {
+            SetLastError("fence handle is null");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+#if defined(_WIN32) && !defined(RIVE_UNREAL)
+        if (!handle->fence)
+        {
+            SetLastError("fence not initialized");
+            return rive_renderer_status_t::internal_error;
+        }
+
+        *out_value = handle->fence->GetCompletedValue();
+        ClearLastError();
+        return rive_renderer_status_t::ok;
+#else
+        (void)out_value;
+        SetLastError("fence operations not supported on this platform");
+        return rive_renderer_status_t::unsupported;
+#endif
+    }
+
+    rive_renderer_status_t rive_renderer_fence_wait(rive_renderer_fence_t fence, std::uint64_t value,
+                                                    std::uint64_t timeout_ms)
+    {
+        auto* handle = ToFence(fence);
+        if (handle == nullptr)
+        {
+            SetLastError("fence handle is null");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+#if defined(_WIN32) && !defined(RIVE_UNREAL)
+        if (!handle->fence)
+        {
+            SetLastError("fence not initialized");
+            return rive_renderer_status_t::internal_error;
+        }
+
+        if (handle->fence->GetCompletedValue() >= value)
+        {
+            ClearLastError();
+            return rive_renderer_status_t::ok;
+        }
+
+        if (value == 0)
+        {
+            SetLastError("fence wait value must be non-zero");
+            return rive_renderer_status_t::invalid_parameter;
+        }
+
+        if (timeout_ms == 0)
+        {
+            SetLastError("fence wait timed out");
+            return rive_renderer_status_t::invalid_parameter;
+        }
+
+        HRESULT hr = handle->fence->SetEventOnCompletion(value, handle->eventHandle);
+        if (FAILED(hr))
+        {
+            SetLastError("SetEventOnCompletion failed");
+            return rive_renderer_status_t::internal_error;
+        }
+
+        DWORD timeoutValue = INFINITE;
+        if (timeout_ms != std::numeric_limits<std::uint64_t>::max())
+        {
+            timeoutValue = timeout_ms >= static_cast<std::uint64_t>(INFINITE - 1)
+                               ? INFINITE
+                               : static_cast<DWORD>(timeout_ms);
+        }
+
+        DWORD waitResult = WaitForSingleObject(handle->eventHandle, timeoutValue);
+        if (waitResult == WAIT_OBJECT_0)
+        {
+            ClearLastError();
+            return rive_renderer_status_t::ok;
+        }
+        if (waitResult == WAIT_TIMEOUT)
+        {
+            SetLastError("fence wait timed out");
+            return rive_renderer_status_t::invalid_parameter;
+        }
+
+        SetLastError("fence wait failed");
+        return rive_renderer_status_t::internal_error;
+#else
+        (void)value;
+        (void)timeout_ms;
+        SetLastError("fence operations not supported on this platform");
+        return rive_renderer_status_t::unsupported;
+#endif
+    }
+
+    rive_renderer_status_t rive_renderer_context_signal_fence(rive_renderer_context_t context,
+                                                              rive_renderer_fence_t   fence, std::uint64_t value)
+    {
+        auto* context_handle = ToContext(context);
+        if (context_handle == nullptr)
+        {
+            SetLastError("context handle is null");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        auto* fence_handle = ToFence(fence);
+        if (fence_handle == nullptr)
+        {
+            SetLastError("fence handle is null");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+#if defined(_WIN32) && !defined(RIVE_UNREAL)
+        if (context_handle->device == nullptr || fence_handle->device == nullptr ||
+            context_handle->device != fence_handle->device)
+        {
+            SetLastError("fence and context must share the same device");
+            return rive_renderer_status_t::invalid_parameter;
+        }
+
+        if (context_handle->device->backend != rive_renderer_backend_t::d3d12)
+        {
+            SetLastError("fence signaling not supported for this backend");
+            return rive_renderer_status_t::unsupported;
+        }
+
+        auto* device = context_handle->device;
+        if (!device->directQueue)
+        {
+            SetLastError("direct queue unavailable");
+            return rive_renderer_status_t::internal_error;
+        }
+
+        std::uint64_t previousValue = fence_handle->lastValue.load(std::memory_order_acquire);
+        std::uint64_t targetValue   = value;
+        if (targetValue == 0)
+        {
+            targetValue = previousValue + 1;
+        }
+        else if (targetValue <= previousValue)
+        {
+            SetLastError("fence signal value must be greater than the last signaled value");
+            return rive_renderer_status_t::invalid_parameter;
+        }
+
+        fence_handle->lastValue.store(targetValue, std::memory_order_release);
+
+        HRESULT hr = device->directQueue->Signal(fence_handle->fence.Get(), targetValue);
+        if (FAILED(hr))
+        {
+            fence_handle->lastValue.store(previousValue, std::memory_order_release);
+            SetLastError("queue signal failed");
+            return rive_renderer_status_t::internal_error;
+        }
+
+        ClearLastError();
+        return rive_renderer_status_t::ok;
+#else
+        (void)context;
+        (void)fence;
+        (void)value;
+        SetLastError("fence signaling not supported on this platform");
+        return rive_renderer_status_t::unsupported;
+#endif
     }
 
     rive_renderer_status_t rive_renderer_path_create(rive_renderer_context_t   context,
@@ -2249,6 +3619,68 @@ extern "C"
 
         std::memcpy(static_cast<std::uint8_t*>(mapped) + offset, data, data_length);
         handle->buffer->unmap();
+        ClearLastError();
+        return rive_renderer_status_t::ok;
+    }
+
+    rive_renderer_status_t rive_renderer_buffer_map(rive_renderer_buffer_t buffer,
+                                                    rive_renderer_buffer_map_flags_t /*flags*/,
+                                                    rive_renderer_mapped_memory_t* out_mapping)
+    {
+        if (out_mapping == nullptr)
+        {
+            SetLastError("mapped memory output pointer is null");
+            return rive_renderer_status_t::null_pointer;
+        }
+
+        auto* handle = ToBuffer(buffer);
+        if (handle == nullptr || !handle->buffer)
+        {
+            SetLastError("buffer handle is invalid");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        if (handle->mapped_ptr != nullptr)
+        {
+            SetLastError("buffer is already mapped");
+            return rive_renderer_status_t::invalid_parameter;
+        }
+
+        void* mapped = handle->buffer->map();
+        if (mapped == nullptr)
+        {
+            SetLastError("buffer map failed");
+            return rive_renderer_status_t::internal_error;
+        }
+
+        handle->mapped_ptr = mapped;
+        out_mapping->data  = mapped;
+        out_mapping->length =
+            handle->size_in_bytes == 0 ? handle->buffer->sizeInBytes() : handle->size_in_bytes;
+        ClearLastError();
+        return rive_renderer_status_t::ok;
+    }
+
+    rive_renderer_status_t rive_renderer_buffer_unmap(rive_renderer_buffer_t buffer,
+                                                      const rive_renderer_mapped_memory_t* /*mapping*/,
+                                                      std::size_t written_bytes)
+    {
+        auto* handle = ToBuffer(buffer);
+        if (handle == nullptr || !handle->buffer)
+        {
+            SetLastError("buffer handle is invalid");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+        if (handle->mapped_ptr == nullptr)
+        {
+            SetLastError("buffer is not mapped");
+            return rive_renderer_status_t::invalid_parameter;
+        }
+
+        handle->buffer->unmap();
+        handle->mapped_ptr = nullptr;
+        static_cast<void>(written_bytes);
         ClearLastError();
         return rive_renderer_status_t::ok;
     }

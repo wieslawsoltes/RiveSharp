@@ -77,6 +77,14 @@ public enum BufferFlags : uint
     MappedOnceAtInitialization = 1 << 0,
 }
 
+[Flags]
+public enum BufferMapFlags : uint
+{
+    None = 0,
+    InvalidateRange = 1 << 0,
+    DiscardRange = 1 << 1,
+}
+
 public enum StrokeCap : byte
 {
     Butt = 0,
@@ -142,6 +150,21 @@ public enum TextDirection : byte
     Automatic = 0,
     Ltr = 1,
     Rtl = 2,
+}
+
+[Flags]
+public enum RendererSurfaceFlags : uint
+{
+    None = 0,
+    EnableVSync = 1 << 0,
+    AllowTearing = 1 << 1,
+}
+
+[Flags]
+public enum RendererPresentFlags : uint
+{
+    None = 0,
+    AllowTearing = 1 << 0,
 }
 
 internal static class RendererStatusExtensions

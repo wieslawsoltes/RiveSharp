@@ -174,6 +174,14 @@ rive_renderer_ffi/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/rive_renderer_ffi.dir/build.make CMakeFiles/rive_renderer_ffi.dir/build
 .PHONY : rive_renderer_ffi/fast
 
+src/metal_surface.o: src/metal_surface.mm.o
+.PHONY : src/metal_surface.o
+
+# target to build an object file
+src/metal_surface.mm.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/rive_renderer_ffi.dir/build.make CMakeFiles/rive_renderer_ffi.dir/src/metal_surface.mm.o
+.PHONY : src/metal_surface.mm.o
+
 src/rive_renderer_ffi.o: src/rive_renderer_ffi.cpp.o
 .PHONY : src/rive_renderer_ffi.o
 
@@ -211,6 +219,7 @@ help:
 	@echo "... list_install_components"
 	@echo "... rebuild_cache"
 	@echo "... rive_renderer_ffi"
+	@echo "... src/metal_surface.o"
 	@echo "... src/rive_renderer_ffi.o"
 	@echo "... src/rive_renderer_ffi.i"
 	@echo "... src/rive_renderer_ffi.s"

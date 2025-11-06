@@ -4,124 +4,45 @@ namespace RiveRenderer;
 
 public sealed class RendererSurface : IDisposable
 {
-    private readonly RendererHandleSafe _handle;
+    private readonly RendererDevice _device;
+    private readonly RendererContext _context;
+    private readonly SurfaceHandleSafe _handle;
     private bool _disposed;
 
-    internal RendererSurface(RendererHandleSafe handle)
+    internal RendererSurface(RendererDevice device, RendererContext context, SurfaceHandleSafe handle)
     {
+        _device = device;
+        _context = context;
         _handle = handle;
     }
 
-    internal NativeRendererHandle DangerousGetHandle() => new() { Handle = _handle.DangerousGetHandle() };
+    internal NativeSurfaceHandle DangerousGetHandle() => new() { Handle = _handle.DangerousGetHandle() };
 
-    public void Save()
+    public (uint Width, uint Height) Size
     {
-        ThrowIfDisposed();
-        NativeMethods.Renderer.Save(DangerousGetHandle()).ThrowIfFailed("Renderer save failed.");
-    }
-
-    public void Restore()
-    {
-        ThrowIfDisposed();
-        NativeMethods.Renderer.Restore(DangerousGetHandle()).ThrowIfFailed("Renderer restore failed.");
-    }
-
-    public void Transform(in Mat2D transform)
-    {
-        ThrowIfDisposed();
-        NativeMethods.Renderer.Transform(DangerousGetHandle(), in transform)
-            .ThrowIfFailed("Renderer transform failed.");
-    }
-
-    public void DrawPath(RenderPath path, RenderPaint paint)
-    {
-        ThrowIfDisposed();
-        path.ThrowIfDisposed();
-        paint.ThrowIfDisposed();
-        NativeMethods.Renderer.DrawPath(
-                DangerousGetHandle(),
-                path.DangerousGetHandle(),
-                paint.DangerousGetHandle())
-            .ThrowIfFailed("Renderer draw path failed.");
-    }
-
-    public void ClipPath(RenderPath path)
-    {
-        ThrowIfDisposed();
-        path.ThrowIfDisposed();
-        NativeMethods.Renderer.ClipPath(
-                DangerousGetHandle(),
-                path.DangerousGetHandle())
-            .ThrowIfFailed("Renderer clip path failed.");
-    }
-
-    public void DrawImageMesh(
-        RenderImage image,
-        RenderBuffer vertices,
-        RenderBuffer uvs,
-        RenderBuffer indices,
-        uint vertexCount,
-        uint indexCount,
-        BlendMode blendMode,
-        float opacity = 1f,
-        ImageSampler? sampler = null)
-    {
-        ThrowIfDisposed();
-        image.ThrowIfDisposed();
-        vertices.ThrowIfDisposed();
-        uvs.ThrowIfDisposed();
-        indices.ThrowIfDisposed();
-
-        if (vertices.Type != BufferType.Vertex || uvs.Type != BufferType.Vertex)
+        get
         {
-            throw new ArgumentException("Vertex and UV buffers must be of type Vertex.");
-        }
-
-        if (indices.Type != BufferType.Index)
-        {
-            throw new ArgumentException("Index buffer must be of type Index.");
-        }
-
-        if (vertexCount == 0 || indexCount == 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(vertexCount), "Vertex and index counts must be non-zero.");
-        }
-
-        unsafe
-        {
-            ImageSampler samplerValue = sampler ?? ImageSampler.LinearClamp;
-            ImageSampler* samplerPtr = sampler.HasValue ? &samplerValue : null;
-            NativeMethods.Renderer.DrawImageMesh(
-                    DangerousGetHandle(),
-                    image.DangerousGetHandle(),
-                    samplerPtr,
-                    vertices.DangerousGetHandle(),
-                    uvs.DangerousGetHandle(),
-                    indices.DangerousGetHandle(),
-                    vertexCount,
-                    indexCount,
-                    blendMode,
-                    opacity)
-                .ThrowIfFailed("Renderer draw image mesh failed.");
+            ThrowIfDisposed();
+            var status = NativeMethods.Surface.GetSize(DangerousGetHandle(), out var width, out var height);
+            status.ThrowIfFailed("Failed to query surface size.");
+            _context.UpdateSizeFromSurface(width, height);
+            return (width, height);
         }
     }
 
-    public void DrawImage(RenderImage image, BlendMode blendMode, float opacity = 1f, ImageSampler? sampler = null)
+    public void Resize(uint width, uint height)
     {
         ThrowIfDisposed();
-        image.ThrowIfDisposed();
-        unsafe
-        {
-            ImageSampler samplerValue = sampler ?? ImageSampler.LinearClamp;
-            ImageSampler* samplerPtr = sampler.HasValue ? &samplerValue : null;
-            NativeMethods.Renderer.DrawImage(
-                    DangerousGetHandle(),
-                    image.DangerousGetHandle(),
-                    samplerPtr,
-                    blendMode,
-                    opacity)
-                .ThrowIfFailed("Renderer draw image failed.");
-        }
+        var status = NativeMethods.Surface.Resize(DangerousGetHandle(), width, height);
+        status.ThrowIfFailed("Failed to resize surface.");
+        _context.UpdateSizeFromSurface(width, height);
+    }
+
+    public void Present(uint presentInterval = 0, RendererPresentFlags flags = RendererPresentFlags.None)
+    {
+        ThrowIfDisposed();
+        var status = NativeMethods.Surface.Present(DangerousGetHandle(), presentInterval, flags);
+        status.ThrowIfFailed("Surface presentation failed.");
     }
 
     public void Dispose()

@@ -178,3 +178,58 @@ internal sealed class ShaderHandleSafe : RefHandle
         return status == RendererStatus.Ok;
     }
 }
+
+internal sealed class FenceHandleSafe : RefHandle
+{
+    internal static FenceHandleSafe FromNative(nint handle)
+    {
+        var result = new FenceHandleSafe();
+        result.SetHandle(handle);
+        return result;
+    }
+
+    protected override bool ReleaseHandle()
+    {
+        var native = new NativeFenceHandle { Handle = handle };
+        var status = NativeMethods.Fence.Release(native);
+        return status == RendererStatus.Ok;
+    }
+}
+
+internal sealed class SurfaceHandleSafe : RefHandle
+{
+    internal DeviceHandle Device { get; }
+    internal ContextHandle Context { get; }
+    private bool _deviceAddRef;
+    private bool _contextAddRef;
+
+    private SurfaceHandleSafe(DeviceHandle device, ContextHandle context)
+    {
+        Device = device;
+        Context = context;
+        Device.DangerousAddRef(ref _deviceAddRef);
+        Context.DangerousAddRef(ref _contextAddRef);
+    }
+
+    internal static SurfaceHandleSafe FromNative(nint handle, DeviceHandle device, ContextHandle context)
+    {
+        var result = new SurfaceHandleSafe(device, context);
+        result.SetHandle(handle);
+        return result;
+    }
+
+    protected override bool ReleaseHandle()
+    {
+        var native = new NativeSurfaceHandle { Handle = handle };
+        var status = NativeMethods.Surface.Release(native);
+        if (_contextAddRef)
+        {
+            Context.DangerousRelease();
+        }
+        if (_deviceAddRef)
+        {
+            Device.DangerousRelease();
+        }
+        return status == RendererStatus.Ok;
+    }
+}

@@ -13,6 +13,14 @@ public sealed class RendererDevice : IDisposable
         _handle = handle;
     }
 
+    private void ThrowIfDisposed()
+    {
+        if (_disposed)
+        {
+            throw new ObjectDisposedException(nameof(RendererDevice));
+        }
+    }
+
     public static RendererDevice Create(RendererBackend backend, ushort adapterIndex = 0, RendererDeviceFlags flags = RendererDeviceFlags.None)
     {
         var createInfo = new NativeDeviceCreateInfo
@@ -32,9 +40,11 @@ public sealed class RendererDevice : IDisposable
     }
 
     internal NativeDeviceHandle DangerousGetHandle() => new() { Handle = _handle.DangerousGetHandle() };
+    internal DeviceHandle Handle => _handle;
 
     public RendererCapabilities GetCapabilities()
     {
+        ThrowIfDisposed();
         var status = NativeMethods.Device.GetCapabilities(DangerousGetHandle(), out var nativeCaps);
         status.ThrowIfFailed("Failed to query device capabilities.");
         return RendererCapabilities.FromNative(nativeCaps);
@@ -42,10 +52,24 @@ public sealed class RendererDevice : IDisposable
 
     public RendererContext CreateContext(uint width, uint height)
     {
+        ThrowIfDisposed();
         var status = NativeMethods.Context.Create(DangerousGetHandle(), width, height, out var nativeContext);
         status.ThrowIfFailed("Failed to create renderer context.");
         var handle = ContextHandle.FromNative(nativeContext.Handle);
         return new RendererContext(this, handle, width, height);
+    }
+
+    public RendererFence CreateFence()
+    {
+        ThrowIfDisposed();
+        var status = NativeMethods.Fence.Create(DangerousGetHandle(), out var nativeFence);
+        status.ThrowIfFailed("Failed to create renderer fence.");
+        if (nativeFence.Handle == 0)
+        {
+            throw new RendererException(RendererStatus.InternalError, "Native fence handle was null.");
+        }
+        var handle = FenceHandleSafe.FromNative(nativeFence.Handle);
+        return new RendererFence(this, handle);
     }
 
     public void Dispose()
