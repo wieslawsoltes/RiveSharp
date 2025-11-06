@@ -92,8 +92,8 @@
 
 2. **Docs Updates**
    - [x] Document build scripts and pipeline notes in `docs/build-guides.md`.
-   - [x] Provide Avalonia sample instructions and troubleshooting once the sample ships. ships.
-     - Notes: `docs/samples/avalonia-null-backend.md` covers prerequisites, build/run commands, and troubleshooting guidance for the Avalonia sample.
+  - [x] Provide Avalonia sample instructions and troubleshooting once the sample ships. ships.
+    - Notes: `docs/samples/avalonia-gpu-rendering.md` documents the GPU-backed Avalonia sample, prerequisites, and current platform status.
    - [x] Include table summarizing native binaries per platform/config (in build guides).
 
 ## Next Steps Summary

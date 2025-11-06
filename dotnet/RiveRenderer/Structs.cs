@@ -152,6 +152,17 @@ internal struct NativeSurfaceCreateInfoMetalLayer
     public RendererSurfaceFlags Flags;
 }
 
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+internal struct NativeSurfaceCreateInfoVulkan
+{
+    public nint Surface;
+    public uint Width;
+    public uint Height;
+    public uint MinImageCount;
+    public uint PresentMode;
+    public RendererSurfaceFlags Flags;
+}
+
 internal static class RendererConstants
 {
     public const int MaxAdapterName = 256;

@@ -149,6 +149,16 @@ extern "C"
         rive_renderer_surface_flags_t flags;
     };
 
+    struct rive_renderer_surface_create_info_vulkan_t
+    {
+        void*                         surface;
+        std::uint32_t                 width;
+        std::uint32_t                 height;
+        std::uint32_t                 min_image_count;
+        std::uint32_t                 present_mode;
+        rive_renderer_surface_flags_t flags;
+    };
+
     struct rive_renderer_vulkan_features_t
     {
         std::uint32_t api_version;
@@ -410,6 +420,12 @@ extern "C"
                                              const rive_renderer_surface_create_info_metal_layer_t* info,
                                              rive_renderer_surface_t* out_surface);
 
+    RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t
+    rive_renderer_surface_create_vulkan(rive_renderer_device_t device,
+                                        rive_renderer_context_t context,
+                                        const rive_renderer_surface_create_info_vulkan_t* info,
+                                        rive_renderer_surface_t* out_surface);
+
     RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t rive_renderer_surface_retain(rive_renderer_surface_t surface);
 
     RIVE_RENDERER_FFI_EXPORT rive_renderer_status_t rive_renderer_surface_release(rive_renderer_surface_t surface);
@@ -630,5 +646,7 @@ static_assert(sizeof(rive_renderer_device_create_info_t) == 8, "Device create in
 static_assert(sizeof(rive_renderer_vulkan_features_t) == 12, "Vulkan features size mismatch");
 static_assert(sizeof(rive_renderer_device_create_info_vulkan_t) == 76,
               "Vulkan device create info size mismatch");
+static_assert(sizeof(rive_renderer_surface_create_info_vulkan_t) == 28,
+              "Vulkan surface create info size mismatch");
 static_assert(sizeof(rive_renderer_frame_options_t) == 16, "Frame options size mismatch");
 static_assert(sizeof(rive_renderer_text_style_t) == 24, "Text style size mismatch");

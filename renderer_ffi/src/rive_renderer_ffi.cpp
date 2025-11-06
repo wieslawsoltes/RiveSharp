@@ -70,6 +70,11 @@ extern "C"
 }
 #endif
 
+#if defined(RIVE_RENDERER_FFI_HAS_VULKAN)
+#include <vulkan/vulkan.h>
+#include "rive/renderer/vulkan/render_context_vulkan_impl.hpp"
+#endif
+
 using namespace std::literals;
 
 namespace
@@ -446,6 +451,16 @@ namespace
         bool                                       isIntel = false;
 #elif defined(__APPLE__) && !defined(RIVE_UNREAL)
         void*                                      metalDevice {nullptr};
+#elif defined(RIVE_RENDERER_FFI_HAS_VULKAN)
+        VkInstance                                 vkInstance = VK_NULL_HANDLE;
+        VkPhysicalDevice                           vkPhysicalDevice = VK_NULL_HANDLE;
+        VkDevice                                   vkDevice = VK_NULL_HANDLE;
+        rive::gpu::VulkanFeatures                  vkFeatures {};
+        PFN_vkGetInstanceProcAddr                  getInstanceProcAddr = nullptr;
+        VkQueue                                    graphicsQueue = VK_NULL_HANDLE;
+        uint32_t                                   graphicsQueueFamilyIndex = 0;
+        VkQueue                                    presentQueue = VK_NULL_HANDLE;
+        uint32_t                                   presentQueueFamilyIndex = 0;
 #endif
     };
 
@@ -770,6 +785,22 @@ namespace
         context->renderTargetTexture = surface->backBuffers[backIndex];
         surface->borrowedIndex       = backIndex;
         return rive_renderer_status_t::ok;
+    }
+#endif
+#if defined(RIVE_RENDERER_FFI_HAS_VULKAN)
+    rive::gpu::VulkanFeatures ConvertVulkanFeatures(const rive_renderer_vulkan_features_t& features)
+    {
+        rive::gpu::VulkanFeatures out {};
+        out.apiVersion = features.api_version;
+        out.independentBlend = features.independent_blend != 0;
+        out.fillModeNonSolid = features.fill_mode_non_solid != 0;
+        out.fragmentStoresAndAtomics = features.fragment_stores_and_atomics != 0;
+        out.shaderClipDistance = features.shader_clip_distance != 0;
+        out.rasterizationOrderColorAttachmentAccess =
+            features.rasterization_order_color_attachment_access != 0;
+        out.fragmentShaderPixelInterlock = features.fragment_shader_pixel_interlock != 0;
+        out.VK_KHR_portability_subset = features.portability_subset != 0;
+        return out;
     }
 #endif
     bool ConvertFillRule(rive_renderer_fill_rule_t value, rive::FillRule* out)
@@ -1243,19 +1274,86 @@ extern "C"
     }
 
     rive_renderer_status_t rive_renderer_device_create_vulkan(const rive_renderer_device_create_info_vulkan_t* info,
-                                                              rive_renderer_device_t*                   out_device)
+                                                              rive_renderer_device_t* out_device)
     {
-        (void)info;
-        if (out_device != nullptr)
+        if (out_device == nullptr)
         {
-            out_device->handle = nullptr;
+            SetLastError("device output pointer is null");
+            return rive_renderer_status_t::null_pointer;
         }
+
+        out_device->handle = nullptr;
+
+        if (info == nullptr)
+        {
+            SetLastError("device create info is null");
+            return rive_renderer_status_t::null_pointer;
+        }
+
 #if defined(RIVE_RENDERER_FFI_HAS_VULKAN)
-        SetLastError("Vulkan backend is not yet implemented");
+        if (info->instance == nullptr || info->physical_device == nullptr || info->device == nullptr ||
+            info->graphics_queue == nullptr)
+        {
+            SetLastError("Vulkan device create info is missing required handles");
+            return rive_renderer_status_t::invalid_parameter;
+        }
+
+        auto* handle = new (std::nothrow) DeviceHandle();
+        if (handle == nullptr)
+        {
+            SetLastError("allocation failed");
+            return rive_renderer_status_t::out_of_memory;
+        }
+
+        handle->backend                   = rive_renderer_backend_t::vulkan;
+        handle->vkInstance                = reinterpret_cast<VkInstance>(info->instance);
+        handle->vkPhysicalDevice          = reinterpret_cast<VkPhysicalDevice>(info->physical_device);
+        handle->vkDevice                  = reinterpret_cast<VkDevice>(info->device);
+        handle->graphicsQueue             = reinterpret_cast<VkQueue>(info->graphics_queue);
+        handle->graphicsQueueFamilyIndex  = info->graphics_queue_family_index;
+        handle->presentQueue              = info->present_queue != nullptr
+                                                ? reinterpret_cast<VkQueue>(info->present_queue)
+                                                : handle->graphicsQueue;
+        handle->presentQueueFamilyIndex =
+            info->present_queue != nullptr ? info->present_queue_family_index : handle->graphicsQueueFamilyIndex;
+        handle->getInstanceProcAddr =
+            reinterpret_cast<PFN_vkGetInstanceProcAddr>(info->get_instance_proc_addr);
+        handle->vkFeatures = ConvertVulkanFeatures(info->features);
+
+        handle->capabilities.backend = rive_renderer_backend_t::vulkan;
+        auto featureFlags =
+            static_cast<std::uint32_t>(rive_renderer_feature_flags_t::headless_supported);
+        auto setFlag = [&](rive_renderer_feature_flags_t flag)
+        {
+            featureFlags |= static_cast<std::uint32_t>(flag);
+        };
+        if (handle->vkFeatures.fragmentStoresAndAtomics)
+        {
+            setFlag(rive_renderer_feature_flags_t::atomic_path_rendering);
+        }
+        if (handle->vkFeatures.rasterizationOrderColorAttachmentAccess ||
+            handle->vkFeatures.fragmentShaderPixelInterlock)
+        {
+            setFlag(rive_renderer_feature_flags_t::raster_ordering);
+        }
+        handle->capabilities.feature_flags =
+            static_cast<rive_renderer_feature_flags_t>(featureFlags);
+        handle->capabilities.max_buffer_size          = 0;
+        handle->capabilities.max_texture_dimension    = 0;
+        handle->capabilities.max_texture_array_layers = 0;
+        handle->capabilities.max_sampler_anisotropy   = 1.0f;
+        handle->capabilities.supports_hdr             = 0;
+        handle->capabilities.supports_presentation =
+            handle->presentQueue != VK_NULL_HANDLE ? 1 : 0;
+
+        out_device->handle = handle;
+        ClearLastError();
+        return rive_renderer_status_t::ok;
 #else
+        (void)info;
         SetLastError("Vulkan backend is not available in this build");
-#endif
         return rive_renderer_status_t::unsupported;
+#endif
     }
 
     rive_renderer_status_t rive_renderer_device_retain(rive_renderer_device_t device)
@@ -1301,6 +1399,15 @@ extern "C"
                 rive_metal_device_release(handle->metalDevice);
                 handle->metalDevice = nullptr;
             }
+#elif defined(RIVE_RENDERER_FFI_HAS_VULKAN)
+            handle->vkInstance               = VK_NULL_HANDLE;
+            handle->vkPhysicalDevice         = VK_NULL_HANDLE;
+            handle->vkDevice                 = VK_NULL_HANDLE;
+            handle->graphicsQueue            = VK_NULL_HANDLE;
+            handle->presentQueue             = VK_NULL_HANDLE;
+            handle->graphicsQueueFamilyIndex = 0;
+            handle->presentQueueFamilyIndex  = 0;
+            handle->getInstanceProcAddr      = nullptr;
 #endif
             delete handle;
         }
@@ -1478,6 +1585,51 @@ extern "C"
             contextHandle->metalContext  = metalContext;
             contextHandle->width         = width;
             contextHandle->height        = height;
+
+            device_handle->ref_count.fetch_add(1, std::memory_order_relaxed);
+
+            out_context->handle = contextHandle;
+            ClearLastError();
+            return rive_renderer_status_t::ok;
+        }
+#endif
+
+#if defined(RIVE_RENDERER_FFI_HAS_VULKAN)
+        if (device_handle->backend == rive_renderer_backend_t::vulkan)
+        {
+            if (!ValidateContextSize(width, height))
+            {
+                SetLastError("context dimensions must be non-zero");
+                return rive_renderer_status_t::invalid_parameter;
+            }
+
+            auto* contextHandle = new (std::nothrow) ContextHandle();
+            if (contextHandle == nullptr)
+            {
+                SetLastError("allocation failed");
+                return rive_renderer_status_t::out_of_memory;
+            }
+
+            contextHandle->device = device_handle;
+            contextHandle->width  = width;
+            contextHandle->height = height;
+
+            rive::gpu::RenderContextVulkanImpl::ContextOptions options {};
+            auto renderContext = rive::gpu::RenderContextVulkanImpl::MakeContext(
+                device_handle->vkInstance,
+                device_handle->vkPhysicalDevice,
+                device_handle->vkDevice,
+                device_handle->vkFeatures,
+                device_handle->getInstanceProcAddr,
+                options);
+            if (!renderContext)
+            {
+                delete contextHandle;
+                SetLastError("RenderContextVulkanImpl::MakeContext failed");
+                return rive_renderer_status_t::internal_error;
+            }
+
+            contextHandle->renderContext = std::move(renderContext);
 
             device_handle->ref_count.fetch_add(1, std::memory_order_relaxed);
 
@@ -2283,6 +2435,53 @@ extern "C"
         return rive_renderer_status_t::ok;
 #else
         SetLastError("Metal surface creation not supported on this platform");
+        return rive_renderer_status_t::unsupported;
+#endif
+    }
+
+    rive_renderer_status_t rive_renderer_surface_create_vulkan(
+        rive_renderer_device_t device,
+        rive_renderer_context_t context,
+        const rive_renderer_surface_create_info_vulkan_t* info,
+        rive_renderer_surface_t* out_surface)
+    {
+        if (out_surface == nullptr)
+        {
+            SetLastError("surface output pointer is null");
+            return rive_renderer_status_t::null_pointer;
+        }
+
+        out_surface->handle = nullptr;
+
+        if (info == nullptr)
+        {
+            SetLastError("surface create info is null");
+            return rive_renderer_status_t::null_pointer;
+        }
+
+        auto* device_handle  = ToDevice(device);
+        auto* context_handle = ToContext(context);
+        if (device_handle == nullptr || context_handle == nullptr)
+        {
+            SetLastError("device or context handle is invalid");
+            return rive_renderer_status_t::invalid_handle;
+        }
+
+#if defined(RIVE_RENDERER_FFI_HAS_VULKAN)
+        if (device_handle->backend != rive_renderer_backend_t::vulkan ||
+            context_handle->device != device_handle)
+        {
+            SetLastError("surface creation not supported for this backend");
+            return rive_renderer_status_t::unsupported;
+        }
+
+        SetLastError("Vulkan surface creation not yet implemented");
+        return rive_renderer_status_t::unimplemented;
+#else
+        (void)device;
+        (void)context;
+        (void)info;
+        SetLastError("Vulkan backend is not available in this build");
         return rive_renderer_status_t::unsupported;
 #endif
     }

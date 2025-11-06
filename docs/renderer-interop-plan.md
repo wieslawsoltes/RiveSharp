@@ -97,20 +97,32 @@ Reference material:
    - [x] 8.1 Define host windowing contracts per platform (Windows HWND/DXGI, macOS CAMetalLayer, Linux VkSurfaceKHR) and gather required lifecycle hooks from the embedding app.
      - Notes: Authored `docs/renderer-surface-contracts.md` covering HWND/DXGI, CAMetalLayer, and VkSurfaceKHR requirements (creation, resize, presentation, teardown) so embedding apps can supply stable handles and handle device-loss.
    - [ ] 8.2 Extend the C ABI with surface/swapchain creation, resize, present, and destruction, mirroring `fiddle_context_*` patterns for Metal/Vulkan/D3D12 and mapping to managed `RendererSurface`.
-     - Notes: D3D12 `HWND` + CAMetalLayer interop is live end-to-end, including managed helpers and native build outputs landing in the sample runtimes (`scripts/build-*.sh`). Added `rive_renderer_device_create_vulkan` ABI scaffolding so hosts can begin wiring native handles; implementation currently returns `unsupported` until Vulkan swapchain management is plumbed. Outstanding: add `rive_renderer_surface_create_vulkan` (VkSurfaceKHR swapchain integration), Linux windowing glue (X11/Wayland), OpenGL context path, and cross-platform smoke tests before flipping this to done.
-     - TODO:
-       1. Define Vulkan device/context handles: extend `DeviceHandle`/`ContextHandle` in `renderer_ffi/src/rive_renderer_ffi.cpp` with Vulkan state (VkInstance, VkDevice, queues, VMA allocator, `RenderContextVulkanImpl`).
-       2. Implement `rive_renderer_device_create_vulkan` to wrap host-provided Vulkan handles using `RenderContextVulkanImpl::MakeContext`. Accept queue family indices, feature mask, and loader function pointer; validate required extensions.
-       3. Add `rive_renderer_surface_create_vulkan` entry point (+ managed bindings) that builds a swapchain via `rive_vk_bootstrap` helpers, creates `RenderTargetVulkanImpl` objects, and wires begin/end/present paths analogous to D3D12/Metal.
-       4. Provide Linux/macOS MoltenVK windowing shims: Xlib (`VkXlibSurfaceCreateInfoKHR`), Wayland, and surface reconfiguration/resize logic.
-       5. Update `NativeLibraryLoader`/RID probing to include Linux RIDs with Vulkan artifacts, and ensure `scripts/build-linux.sh` stages the Vulkan-enabled native libraries.
-       6. Add managed `RendererVulkanSurfaceOptions` and sample usage (e.g., SDL/Avalonia on Linux) once native pieces are in place.
+     - Notes: D3D12 `HWND` + CAMetalLayer interop is live end-to-end, including managed helpers and native build outputs landing in the sample runtimes (`scripts/build-*.sh`). `rive_renderer_device_create_vulkan` now accepts host-provided VkInstance/Device/Queue handles (with managed `RendererDevice.CreateVulkan` wrapper), enabling bring-your-own swapchain scenarios; `rive_renderer_surface_create_vulkan`/`RendererContext.CreateSurfaceVulkan` are exported but currently return `unimplemented` until swapchain management, resize/present, and frame lifecycle wiring are completed.
+     - Execution plan to finish implementation:
+       1. **Swapchain/Resource Plumbing (Native):**
+          - Extend `SurfaceHandle` with Vulkan swapchain fields (VkSurfaceKHR, VkSwapchainKHR, image views, fences/semaphores, command buffers, queue family indices, present mode, frame counters, resize flags).
+          - Use `rive_vkb::VulkanSwapchain` (or equivalent inline logic) to create/recreate the swapchain, cache `RenderTargetVulkanImpl` instances per image, and track `vkutil::ImageAccess` transitions.
+          - Implement `rive_renderer_surface_create_vulkan`, `rive_renderer_surface_resize`, `rive_renderer_surface_present`, and `rive_renderer_context_submit` for the Vulkan backend (acquire image → begin frame → flush via `RenderContextVulkanImpl` → queue submit → present → handle `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` by recreating swapchain).
+          - Load required Vulkan function pointers via `PFN_vkGetInstanceProcAddr` (vkCreateSwapchainKHR, vkAcquireNextImageKHR, vkQueuePresentKHR, etc.) and wire host provided queues (graphics/present).
+       2. **Windowing Integrations:**
+          - Add creation helpers for Xlib (`VkXlibSurfaceCreateInfoKHR`) and Wayland; defer to MoltenVK on macOS (ensure CAMetalLayer → VkSurfaceKHR path documented and validated).
+          - Expose minimal C ABI shims for host applications that don’t already have a VkSurfaceKHR (optional follow-up once native path stabilises).
+       3. **Frame Lifecycle & Error Handling:**
+          - Update `rive_renderer_context_begin_frame/end_frame/submit` to honour the Vulkan branch (command buffer reset, frame fence wait, image acquisition, flush, queue submit with semaphores).
+          - Provide device-loss recovery hooks (report `device_lost`, cleanup/recreate resources) aligning with D3D12/Metal semantics.
+       4. **Managed Bindings & Samples:**
+          - Finalise `RendererContext.CreateSurfaceVulkan` once native path is functional; add Linux/MoltenVK runtime checks and status messaging (parity with Windows sample).
+          - Extend the Avalonia sample (or add an SDL/Skia minimal harness) to render via Vulkan on Linux, exercising resize/vsync/present.
+       5. **Build, Packaging, and Docs:**
+          - Update `scripts/build-linux.sh` (and macOS when MoltenVK is ready) to stage Vulkan-enabled binaries in runtime folders (ensure RID probing picks them up).
+          - Provide troubleshooting guides (required Vulkan extensions, queue family requirements, environment variables) and refresh `docs/samples/avalonia-gpu-rendering.md` once Vulkan rendering is enabled.
    - [ ] 8.3 Expose GPU buffer map/unmap and synchronization primitives (fences/semaphores) across backends so persistent uploads bypass staging paths; update managed bindings with safe pinning helpers.
      - Notes: Introduced shared `rive_renderer_buffer_map`/`unmap` entry points with managed `RenderBuffer.Mapping` helpers and added D3D12 fence primitives + managed `RendererFence` to coordinate queue completion; additional backends still need plumbing and cross-queue semantics.
    - [ ] 8.4 Verify backend coverage (Metal/Vulkan/D3D12/D3D11/OpenGL/Null) with representative smoke tests and document unsupported combinations.
 
 9. [ ] Phase 9 – Samples & CI Expansion
-   - [ ] 9.1 Build an Avalonia sample that drives the new surface APIs on each desktop platform, including resize/vsync error handling and device-loss recovery.
+   - [x] 9.1 Build an Avalonia sample that drives the new surface APIs on each desktop platform, including resize/vsync error handling and device-loss recovery.
+     - Notes: `samples/Avalonia/RiveRenderer.AvaloniaSample` now initialises the native renderer from Avalonia, creates a D3D12 swapchain on Windows, animates frames, and handles resize/device-loss via SafeHandle reinitialisation. macOS/Linux currently fall back to the null backend until Metal/Vulkan surfaces are fully wired; the status text reflects the active backend.
    - [ ] 9.2 Add automated render-validation tests (golden image diffs for CPU/null backend, checksum-based probes for GPU backends) runnable in CI with headless adapters.
    - [ ] 9.3 Provision CI runners with required GPU SDKs (metal/d3d/vulkan) and integrate native + managed build/test/publish steps, including artifact signing where needed.
    - [ ] 9.4 Expand docs with platform-specific setup guides and troubleshooting for the sample + CI flows.

@@ -38,7 +38,7 @@ The validation scripts gate Visual Studio, CMake, Ninja, Vulkan SDK, and Metal a
 
 ## Samples
 
-- `samples/Avalonia/RiveRenderer.AvaloniaSample` – Avalonia desktop app validating native discovery via the null backend. See `docs/samples/avalonia-null-backend.md` for usage instructions.
+- `samples/Avalonia/RiveRenderer.AvaloniaSample` – Avalonia desktop app that exercises GPU surface creation (D3D12 on Windows) and reports status for other platforms. See `docs/samples/avalonia-gpu-rendering.md` for usage instructions.
 - `samples/Validation/RiveRenderer.RenderValidation` – Console harness used by CI render validation job. See `docs/samples/render-validation.md`.
 
 ## Code Quality

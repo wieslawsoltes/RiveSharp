@@ -23,6 +23,14 @@ internal static partial class NativeMethods
             in NativeSurfaceCreateInfoMetalLayer info,
             out NativeSurfaceHandle surface);
 
+        [LibraryImport(LibraryName, EntryPoint = "rive_renderer_surface_create_vulkan")]
+        [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+        internal static partial RendererStatus CreateVulkan(
+            NativeDeviceHandle device,
+            NativeContextHandle context,
+            in NativeSurfaceCreateInfoVulkan info,
+            out NativeSurfaceHandle surface);
+
         [LibraryImport(LibraryName, EntryPoint = "rive_renderer_surface_retain")]
         [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
         internal static partial RendererStatus Retain(NativeSurfaceHandle surface);

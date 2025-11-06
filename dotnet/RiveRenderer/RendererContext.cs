@@ -218,6 +218,51 @@ public sealed class RendererContext : IDisposable
         return new RendererSurface(_device, this, handle);
     }
 
+    public RendererSurface CreateSurfaceVulkan(
+        nint surface,
+        uint width,
+        uint height,
+        RendererVulkanSurfaceOptions options = default)
+    {
+        ThrowIfDisposed();
+        if (surface == 0)
+        {
+            throw new ArgumentException("VkSurfaceKHR handle must be non-zero.", nameof(surface));
+        }
+
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+        {
+            throw new PlatformNotSupportedException("Vulkan surface creation requires Linux or macOS with MoltenVK.");
+        }
+
+        if (width == 0 || height == 0)
+        {
+            if (_width == 0 || _height == 0)
+            {
+                throw new InvalidOperationException("Context dimensions are unknown; provide explicit width and height.");
+            }
+            width = width == 0 ? _width : width;
+            height = height == 0 ? _height : height;
+        }
+
+        var nativeInfo = options.ToNative(surface, width, height);
+        var status = NativeMethods.Surface.CreateVulkan(
+            _device.DangerousGetHandle(),
+            DangerousGetHandle(),
+            in nativeInfo,
+            out var nativeSurface);
+        status.ThrowIfFailed("Failed to create Vulkan surface.");
+
+        if (nativeSurface.Handle == 0)
+        {
+            throw new RendererException(RendererStatus.InternalError, "Native surface handle was null.");
+        }
+
+        var handle = SurfaceHandleSafe.FromNative(nativeSurface.Handle, _device.Handle, _handle);
+        UpdateSizeFromSurface(width, height);
+        return new RendererSurface(_device, this, handle);
+    }
+
     public void Dispose()
     {
         if (_disposed)
