@@ -71,10 +71,60 @@ find_native_lib() {
   return 1
 }
 
+ensure_llvm_tool() {
+  local tool="$1"
+  shift
+  local shim_target=""
+  local shim_dir="${ROOT_DIR}/build/.toolshims"
+
+  if command -v "${tool}" >/dev/null 2>&1; then
+    return
+  fi
+
+  shopt -s nullglob
+  local candidate
+  for candidate in "/usr/bin/${tool}-"* "/usr/lib/llvm-"*/bin/"${tool}"; do
+    if [[ -x "${candidate}" ]]; then
+      shim_target="${candidate}"
+      break
+    fi
+  done
+  shopt -u nullglob
+
+  if [[ -z "${shim_target}" ]]; then
+    while [[ $# -gt 0 && -z "${shim_target}" ]]; do
+      candidate="$(command -v "$1" 2>/dev/null || true)"
+      if [[ -n "${candidate}" ]]; then
+        shim_target="${candidate}"
+        break
+      fi
+      shift || true
+    done
+  fi
+
+  if [[ -z "${shim_target}" ]]; then
+    echo "error: required tool '${tool}' not found and no fallback candidate available" >&2
+    exit 1
+  fi
+
+  mkdir -p "${shim_dir}"
+  local shim_path="${shim_dir}/${tool}"
+  printf '#!/usr/bin/env bash\nexec %q "$@"\n' "${shim_target}" > "${shim_path}"
+  chmod +x "${shim_path}"
+  case ":${PATH}:" in
+    *":${shim_dir}:"*) ;;
+    *) export PATH="${shim_dir}:${PATH}" ;;
+  esac
+  echo "info: shimmed ${tool} -> ${shim_target}"
+}
+
 if ! command -v cmake >/dev/null 2>&1; then
   echo "error: cmake is required" >&2
   exit 1
 fi
+
+ensure_llvm_tool "llvm-ar" "ar"
+ensure_llvm_tool "llvm-ranlib" "ranlib"
 
 for config in "${CONFIGS[@]}"; do
   echo "==> Preparing river-renderer workspace"

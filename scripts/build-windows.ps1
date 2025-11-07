@@ -18,6 +18,11 @@ if (-not $BashCommand) {
     throw "Required command 'bash' not found. Ensure Git for Windows (with bash) is installed and on PATH."
 }
 
+$MakeCommand = Get-Command make -ErrorAction SilentlyContinue
+if (-not $MakeCommand) {
+    throw "Required command 'make' not found. Install GNU make (e.g. 'choco install make')."
+}
+
 function Invoke-BashScript {
     param(
         [Parameter(Mandatory = $true)]

@@ -35,7 +35,25 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential ninja-build cmake libvulkan-dev vulkan-tools mesa-vulkan-drivers
+          sudo apt-get install -y build-essential ninja-build cmake libvulkan-dev vulkan-tools mesa-vulkan-drivers llvm
+          if ! command -v llvm-ar >/dev/null 2>&1; then
+            LLVM_AR_CANDIDATE=$(ls /usr/bin/llvm-ar-* 2>/dev/null | head -n 1)
+            if [[ -z "$LLVM_AR_CANDIDATE" ]]; then
+              LLVM_AR_CANDIDATE=$(ls /usr/lib/llvm-*/bin/llvm-ar 2>/dev/null | head -n 1)
+            fi
+            if [[ -n "$LLVM_AR_CANDIDATE" ]]; then
+              sudo ln -sf "$LLVM_AR_CANDIDATE" /usr/local/bin/llvm-ar
+            fi
+          fi
+          if ! command -v llvm-ranlib >/dev/null 2>&1; then
+            LLVM_RANLIB_CANDIDATE=$(ls /usr/bin/llvm-ranlib-* 2>/dev/null | head -n 1)
+            if [[ -z "$LLVM_RANLIB_CANDIDATE" ]]; then
+              LLVM_RANLIB_CANDIDATE=$(ls /usr/lib/llvm-*/bin/llvm-ranlib 2>/dev/null | head -n 1)
+            fi
+            if [[ -n "$LLVM_RANLIB_CANDIDATE" ]]; then
+              sudo ln -sf "$LLVM_RANLIB_CANDIDATE" /usr/local/bin/llvm-ranlib
+            fi
+          fi
       - name: Install prerequisites (macOS)
         if: matrix.platform == 'macos'
         shell: bash
@@ -52,6 +70,11 @@ jobs:
             choco install ninja --no-progress -y
           } else {
             Write-Host "ninja already installed"
+          }
+          if (-not (Get-Command make -ErrorAction SilentlyContinue)) {
+            choco install make --no-progress -y
+          } else {
+            Write-Host "make already installed"
           }
           $vulkanSdk = $env:VULKAN_SDK
           if ([string]::IsNullOrWhiteSpace($vulkanSdk)) {
