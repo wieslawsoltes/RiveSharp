@@ -75,5 +75,12 @@ jobs:
           draft: true
           files: artifacts/nuget/*.nupkg
       - name: Push NuGet package
-        if: startsWith(github.ref, 'refs/tags/') && secrets.NUGET_API_KEY != ''
-        run: dotnet nuget push artifacts/nuget/*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }}
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "NUGET_API_KEY not provided; skipping push."
+            exit 0
+          fi
+          dotnet nuget push artifacts/nuget/*.nupkg --source https://api.nuget.org/v3/index.json --api-key "$NUGET_API_KEY"

@@ -403,3 +403,5 @@ FodyWeavers.xsd
 /renderer_ffi/build-release/CMakeFiles
 /build/renderer_ffi/CMakeFiles
 /build/CMakeFiles
+/renderer_ffi/build/
+/renderer_ffi/build-release/
