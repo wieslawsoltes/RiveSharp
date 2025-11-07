@@ -54,6 +54,12 @@ jobs:
               sudo ln -sf "$LLVM_RANLIB_CANDIDATE" /usr/local/bin/llvm-ranlib
             fi
           fi
+      - name: Free disk space (Linux)
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          chmod +x scripts/cleanup-runner.sh
+          ./scripts/cleanup-runner.sh
       - name: Install prerequisites (macOS)
         if: matrix.platform == 'macos'
         shell: bash
