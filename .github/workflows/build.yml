@@ -55,13 +55,11 @@ jobs:
           }
           $vulkanSdk = $env:VULKAN_SDK
           if ([string]::IsNullOrWhiteSpace($vulkanSdk)) {
-            Write-Host "VULKAN_SDK is not set, installing Vulkan SDK."
-            choco install vulkan-sdk --no-progress -y
+            Write-Host "VULKAN_SDK is not set. Skipping SDK install (headers are vendored via river-renderer)."
           } elseif (-not (Test-Path $vulkanSdk)) {
-            Write-Host "VULKAN_SDK points to '$vulkanSdk' which does not exist. Reinstalling."
-            choco install vulkan-sdk --no-progress -y
+            Write-Warning "VULKAN_SDK is set to '$vulkanSdk' but the path does not exist. Continuing without it."
           } else {
-            Write-Host "Vulkan SDK already present at $vulkanSdk"
+            Write-Host "Using Vulkan SDK found at $vulkanSdk"
           }
       - name: Cache Premake
         uses: actions/cache@v4
